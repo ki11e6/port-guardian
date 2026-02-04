@@ -142,7 +142,7 @@ function formatRestartPolicy(policy: string): string {
 /**
  * Display warning box for restart:always
  */
-export function printRestartWarning(containerName: string): void {
+export function printRestartWarning(_containerName: string): void {
   console.log();
   console.log(chalk.yellow('  ┌' + '─'.repeat(60) + '┐'));
   console.log(chalk.yellow('  │') + chalk.yellow.bold(' ⚠  WARNING: Container has restart:always policy') + ' '.repeat(11) + chalk.yellow('│'));
@@ -180,7 +180,6 @@ export function printInfo(message: string): void {
  * Display summary
  */
 export function printSummary(result: ScanResult): void {
-  const total = result.ports.length;
   const available = result.ports.filter((p) => p.available).length;
   const blocked = result.conflictCount;
 
