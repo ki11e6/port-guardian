@@ -78,13 +78,28 @@ async function checkPortWithLsof(port: number): Promise<LsofResult> {
 }
 
 /**
- * Check port with ss (sees kernel-level bindings including root processes)
+ * Check port with ss (Linux) or netstat (macOS)
+ * Sees kernel-level bindings including root processes
  */
 async function checkPortWithSs(port: number): Promise<LsofResult> {
+  const isMacOS = process.platform === 'darwin';
+
   try {
-    const { stdout } = await execAsync(
-      `ss -tlnH 'sport = :${port}' 2>/dev/null`
-    );
+    let stdout: string;
+
+    if (isMacOS) {
+      // macOS: use netstat
+      const result = await execAsync(
+        `netstat -anv -p tcp 2>/dev/null | grep '\\.${port}\\s' | grep LISTEN`
+      );
+      stdout = result.stdout;
+    } else {
+      // Linux: use ss
+      const result = await execAsync(
+        `ss -tlnH 'sport = :${port}' 2>/dev/null`
+      );
+      stdout = result.stdout;
+    }
 
     const line = stdout.trim();
     if (!line) {
@@ -194,6 +209,31 @@ export async function getProcessCommandLine(pid: number): Promise<string | null>
   try {
     const { stdout } = await execAsync(`ps -p ${pid} -o args= 2>/dev/null`);
     return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check if a process is kubectl port-forward
+ */
+export async function isKubectlPortForward(pid: number): Promise<boolean> {
+  const cmdLine = await getProcessCommandLine(pid);
+  if (!cmdLine) return false;
+  return cmdLine.includes('kubectl') && cmdLine.includes('port-forward');
+}
+
+/**
+ * Check if a port is bound by a systemd service
+ */
+export async function isSystemdService(pid: number): Promise<string | null> {
+  try {
+    // Get the systemd unit for this PID
+    const { stdout } = await execAsync(
+      `systemctl status ${pid} 2>/dev/null | head -1 | grep -oP '(?<=● )\\S+' || cat /proc/${pid}/cgroup 2>/dev/null | grep -oP '(?<=@)[^.]+' | head -1`
+    );
+    const unit = stdout.trim();
+    return unit || null;
   } catch {
     return null;
   }

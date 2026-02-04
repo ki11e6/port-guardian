@@ -191,6 +191,64 @@ services:
       expect(ports).toHaveLength(1);
       expect(ports[0].port).toBe(8000);
     });
+
+    it('should handle ports with protocol suffix', async () => {
+      const compose = `
+version: '3'
+services:
+  web:
+    ports:
+      - "8080:80/tcp"
+  udp-svc:
+    ports:
+      - "5353:53/udp"
+`;
+      await writeFile(join(testDir, 'docker-compose.yml'), compose);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(2);
+      expect(ports.map((p) => p.port).sort()).toEqual([5353, 8080]);
+    });
+
+    it('should handle long syntax port mappings', async () => {
+      const compose = `
+version: '3.8'
+services:
+  web:
+    ports:
+      - target: 80
+        published: 8080
+        protocol: tcp
+  api:
+    ports:
+      - target: 3000
+        published: "3001"
+`;
+      await writeFile(join(testDir, 'docker-compose.yml'), compose);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(2);
+      expect(ports.find((p) => p.port === 8080)).toBeDefined();
+      expect(ports.find((p) => p.port === 3001)).toBeDefined();
+    });
+
+    it('should handle long syntax without published port', async () => {
+      const compose = `
+version: '3.8'
+services:
+  internal:
+    ports:
+      - target: 9000
+`;
+      await writeFile(join(testDir, 'docker-compose.yml'), compose);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0].port).toBe(9000);
+    });
   });
 
   describe('priority and deduplication', () => {

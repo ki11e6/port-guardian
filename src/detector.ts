@@ -139,15 +139,44 @@ async function parseDockerCompose(
 }
 
 /**
- * Parse a docker-compose port mapping to get host port
- * Handles: "3000", "3000:80", "127.0.0.1:3000:80"
+ * Port mapping can be string, number, or object (long syntax)
  */
-function parsePortMapping(mapping: string | number): number | null {
+interface LongSyntaxPort {
+  target: number;
+  published?: number | string;
+  host_ip?: string;
+  protocol?: string;
+}
+
+/**
+ * Parse a docker-compose port mapping to get host port
+ * Handles:
+ * - Short syntax: "3000", "3000:80", "127.0.0.1:3000:80", "3000:80/tcp"
+ * - Long syntax: { target: 80, published: 8080 }
+ * - Ranges: "3000-3005:80-85"
+ */
+function parsePortMapping(mapping: string | number | LongSyntaxPort): number | null {
+  // Handle long syntax (object form)
+  if (typeof mapping === 'object' && mapping !== null) {
+    const longSyntax = mapping as LongSyntaxPort;
+    if (longSyntax.published !== undefined) {
+      const published = typeof longSyntax.published === 'string'
+        ? parseInt(longSyntax.published, 10)
+        : longSyntax.published;
+      return isNaN(published) ? null : published;
+    }
+    // If no published port, target is used as both
+    return longSyntax.target || null;
+  }
+
   if (typeof mapping === 'number') {
     return mapping;
   }
 
-  const str = String(mapping);
+  let str = String(mapping);
+
+  // Strip protocol suffix (e.g., "/tcp", "/udp")
+  str = str.replace(/\/(tcp|udp)$/i, '');
 
   // Handle range (e.g., "3000-3005:80-85") - take first port
   if (str.includes('-')) {

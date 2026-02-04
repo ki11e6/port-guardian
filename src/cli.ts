@@ -3,7 +3,18 @@
  */
 
 import { parseArgs } from 'node:util';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import inquirer from 'inquirer';
+
+// Get version from package.json
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const packageJson = JSON.parse(
+  readFileSync(join(__dirname, '..', 'package.json'), 'utf-8')
+);
+const VERSION = packageJson.version;
 import ora from 'ora';
 import { detectPorts } from './detector.js';
 import { checkPorts } from './scanner.js';
@@ -43,7 +54,7 @@ export async function main(): Promise<void> {
   }
 
   if (values.version) {
-    console.log('port-guardian v0.1.0');
+    console.log(`port-guardian v${VERSION}`);
     process.exit(0);
   }
 
@@ -60,8 +71,16 @@ export async function main(): Promise<void> {
   let ports: number[];
 
   if (positionals.length > 0) {
-    // Explicit ports from CLI args
-    ports = positionals.map((p) => parseInt(p, 10)).filter((p) => !isNaN(p));
+    // Explicit ports from CLI args with validation
+    const parsedPorts = positionals.map((p) => parseInt(p, 10));
+    const invalidPorts = parsedPorts.filter((p) => isNaN(p) || p < 1 || p > 65535);
+
+    if (invalidPorts.length > 0) {
+      printError(`Invalid port(s): ${positionals.filter((_, i) => isNaN(parsedPorts[i]) || parsedPorts[i] < 1 || parsedPorts[i] > 65535).join(', ')}. Ports must be 1-65535.`);
+      process.exit(1);
+    }
+
+    ports = parsedPorts;
     printInfo(`Checking ${ports.length} port(s) from command line`);
   } else {
     // Auto-detect from project files
@@ -95,8 +114,8 @@ export async function main(): Promise<void> {
         available: true,
         warnings: [],
       });
-    } else {
-      const blocker = await resolveBlocker(result.process!, port);
+    } else if (result.process) {
+      const blocker = await resolveBlocker(result.process, port);
       const warnings = generateWarnings(blocker);
 
       portStatuses.push({
@@ -104,6 +123,13 @@ export async function main(): Promise<void> {
         available: false,
         blocker,
         warnings,
+      });
+    } else {
+      // Port is blocked but we couldn't identify the process
+      portStatuses.push({
+        port,
+        available: false,
+        warnings: ['Unable to identify blocking process. Try running with sudo.'],
       });
     }
   }

@@ -49,8 +49,11 @@ export async function killBlocker(
         break;
 
       case 'systemctl-stop':
-        // Future: systemctl stop <service>
-        throw new Error('systemctl-stop not yet implemented');
+        if (!blocker.commandLine) {
+          throw new Error('No systemd unit specified');
+        }
+        await stopSystemdService(blocker.commandLine);
+        break;
 
       default:
         throw new Error(`Unknown action: ${blocker.suggestedAction}`);
@@ -72,11 +75,22 @@ export async function killBlocker(
 }
 
 /**
+ * Validate PID is a positive integer
+ */
+function validatePid(pid: number): number {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    throw new Error(`Invalid PID: ${pid}`);
+  }
+  return pid;
+}
+
+/**
  * Kill a process by PID
  */
 async function killProcess(pid: number, force: boolean = false): Promise<void> {
+  const safePid = validatePid(pid);
   const signal = force ? '-9' : '-15';
-  await execAsync(`kill ${signal} ${pid}`);
+  await execAsync(`kill ${signal} ${safePid}`);
 
   // Wait a moment for process to terminate
   await sleep(100);
@@ -91,18 +105,43 @@ async function killProcess(pid: number, force: boolean = false): Promise<void> {
 }
 
 /**
+ * Sanitize container name to prevent command injection
+ */
+function sanitizeContainerName(name: string): string {
+  // Docker container names can only contain [a-zA-Z0-9][a-zA-Z0-9_.-]
+  // Reject anything that doesn't match this pattern
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) {
+    throw new Error(`Invalid container name: ${name}`);
+  }
+  return name;
+}
+
+/**
  * Stop a Docker container
  */
 async function stopContainer(containerName: string): Promise<void> {
-  await execAsync(`docker stop ${containerName}`);
+  const safeName = sanitizeContainerName(containerName);
+  await execAsync(`docker stop ${safeName}`);
 }
 
 /**
  * Stop and remove a Docker container
  */
 async function stopAndRemoveContainer(containerName: string): Promise<void> {
-  await execAsync(`docker stop ${containerName}`);
-  await execAsync(`docker rm ${containerName}`);
+  const safeName = sanitizeContainerName(containerName);
+  await execAsync(`docker stop ${safeName}`);
+  await execAsync(`docker rm ${safeName}`);
+}
+
+/**
+ * Stop a systemd service
+ */
+async function stopSystemdService(unitName: string): Promise<void> {
+  // Validate unit name (alphanumeric, dots, dashes, @)
+  if (!/^[a-zA-Z0-9@._-]+$/.test(unitName)) {
+    throw new Error(`Invalid systemd unit name: ${unitName}`);
+  }
+  await execAsync(`sudo systemctl stop ${unitName}`);
 }
 
 /**

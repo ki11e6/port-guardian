@@ -83,8 +83,8 @@ export async function scan(options: ScanOptions = {}): Promise<ScanResult> {
         available: true,
         warnings: [],
       });
-    } else {
-      const blocker = await resolveBlocker(result.process!, port);
+    } else if (result.process) {
+      const blocker = await resolveBlocker(result.process, port);
       const warnings = generateWarnings(blocker);
 
       portStatuses.push({
@@ -92,6 +92,13 @@ export async function scan(options: ScanOptions = {}): Promise<ScanResult> {
         available: false,
         blocker,
         warnings,
+      });
+    } else {
+      // Port is blocked but we couldn't identify the process
+      portStatuses.push({
+        port,
+        available: false,
+        warnings: ['Unable to identify blocking process. Try running with sudo.'],
       });
     }
   }

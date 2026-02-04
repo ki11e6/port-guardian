@@ -108,6 +108,133 @@ describe('killer', () => {
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
     });
+
+    it('should return error for invalid PID (negative)', async () => {
+      const blocker: Blocker = {
+        type: 'native',
+        pid: -1,
+        processName: 'fake-process',
+        isOrphanedDockerProxy: false,
+        hasRestartLoop: false,
+        suggestedAction: 'kill-process',
+        suggestedCommand: 'kill -1',
+        requiresSudo: false,
+        safeToAutoKill: false,
+        isPermanentFix: true,
+      };
+
+      const result = await killBlocker(blocker, { dryRun: false });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid PID');
+    });
+
+    it('should return error for invalid PID (zero)', async () => {
+      const blocker: Blocker = {
+        type: 'native',
+        pid: 0,
+        processName: 'fake-process',
+        isOrphanedDockerProxy: false,
+        hasRestartLoop: false,
+        suggestedAction: 'kill-process',
+        suggestedCommand: 'kill 0',
+        requiresSudo: false,
+        safeToAutoKill: false,
+        isPermanentFix: true,
+      };
+
+      const result = await killBlocker(blocker, { dryRun: false });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid PID');
+    });
+  });
+
+  describe('killBlocker - command injection protection', () => {
+    it('should reject container names with shell metacharacters', async () => {
+      const blocker: Blocker = {
+        type: 'docker-container',
+        pid: 1234,
+        processName: 'docker-proxy',
+        docker: {
+          containerName: 'test; rm -rf /',
+          containerId: 'abc123',
+          image: 'nginx',
+          state: 'running',
+          restartPolicy: 'no',
+        },
+        isOrphanedDockerProxy: false,
+        hasRestartLoop: false,
+        suggestedAction: 'stop-container',
+        suggestedCommand: 'docker stop "test; rm -rf /"',
+        requiresSudo: false,
+        safeToAutoKill: false,
+        isPermanentFix: true,
+      };
+
+      const result = await killBlocker(blocker, { dryRun: false });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid container name');
+    });
+
+    it('should reject container names with backticks', async () => {
+      const blocker: Blocker = {
+        type: 'docker-container',
+        pid: 1234,
+        processName: 'docker-proxy',
+        docker: {
+          containerName: 'test`whoami`',
+          containerId: 'abc123',
+          image: 'nginx',
+          state: 'running',
+          restartPolicy: 'no',
+        },
+        isOrphanedDockerProxy: false,
+        hasRestartLoop: false,
+        suggestedAction: 'stop-container',
+        suggestedCommand: 'docker stop test`whoami`',
+        requiresSudo: false,
+        safeToAutoKill: false,
+        isPermanentFix: true,
+      };
+
+      const result = await killBlocker(blocker, { dryRun: false });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid container name');
+    });
+
+    it('should accept valid container names with dots and dashes', async () => {
+      // This test only checks the validation passes, not actual container stop
+      const blocker: Blocker = {
+        type: 'docker-container',
+        pid: 1234,
+        processName: 'docker-proxy',
+        docker: {
+          containerName: 'my-app_db.backup-2024',
+          containerId: 'abc123',
+          image: 'nginx',
+          state: 'running',
+          restartPolicy: 'no',
+        },
+        isOrphanedDockerProxy: false,
+        hasRestartLoop: false,
+        suggestedAction: 'stop-container',
+        suggestedCommand: 'docker stop my-app_db.backup-2024',
+        requiresSudo: false,
+        safeToAutoKill: false,
+        isPermanentFix: true,
+      };
+
+      // Will fail because container doesn't exist, but should not fail on validation
+      const result = await killBlocker(blocker, { dryRun: false });
+
+      // Error should NOT be about invalid container name
+      if (!result.success) {
+        expect(result.error).not.toContain('Invalid container name');
+      }
+    });
   });
 });
 
