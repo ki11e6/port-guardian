@@ -207,11 +207,16 @@ async function interactiveResolve(
   }
 }
 
+interface Choice {
+  name: string;
+  value: string;
+}
+
 /**
  * Build action choices based on blocker type
  */
-function buildActionChoices(blocker: Blocker): inquirer.ChoiceCollection {
-  const choices: inquirer.ChoiceCollection = [];
+function buildActionChoices(blocker: Blocker): Choice[] {
+  const choices: Choice[] = [];
 
   if (blocker.isOrphanedDockerProxy) {
     choices.push({

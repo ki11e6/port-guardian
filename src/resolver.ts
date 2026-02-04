@@ -6,7 +6,6 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import type {
   Blocker,
-  BlockerType,
   DockerInfo,
   ProcessInfo,
   RestartPolicy,
