@@ -21,7 +21,9 @@ jobs:
         with:
           node-version: 22
           cache: 'npm'
-          registry-url: 'https://registry.npmjs.org'
+
+      - name: Update npm to latest (OIDC requires >=11.5.1)
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: npm ci
@@ -37,8 +39,6 @@ jobs:
 
       - name: Publish to npm (OIDC Trusted Publishing)
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ''
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
