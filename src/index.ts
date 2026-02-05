@@ -21,6 +21,7 @@ export type {
   ResolutionAction,
   PortGuardianConfig,
   CliOptions,
+  DetectOptions,
 } from './types.js';
 
 /**

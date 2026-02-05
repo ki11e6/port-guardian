@@ -85,7 +85,7 @@ export async function main(): Promise<void> {
   } else {
     // Auto-detect from project files
     const spinner = ora('Detecting ports from project files...').start();
-    const sources = await detectPorts();
+    const sources = await detectPorts({ verbose: options.verbose });
     spinner.stop();
 
     printDetectedPorts(sources);
@@ -93,7 +93,10 @@ export async function main(): Promise<void> {
   }
 
   if (ports.length === 0) {
-    printError('No ports to check. Specify ports or create configuration.');
+    printError(
+      'No ports detected. Checked: .portguardian.yml, package.json, docker-compose, .env files, Nx/Angular project.json, framework configs, Dockerfile.\n' +
+      '  Specify ports explicitly or create a .portguardian.yml config.'
+    );
     process.exit(1);
   }
 
@@ -299,8 +302,14 @@ function printHelp(): void {
     port-guardian --force          # Kill all blockers
     port-guardian --ci             # CI mode (fail on conflicts)
 
-  Configuration:
-    Create .portguardian.yml or add portGuardian to package.json
+  Port Detection Sources (auto-detect order):
+    .portguardian.yml       100%  - Explicit port configuration
+    package.json            100%  - portGuardian field
+    docker-compose*.yml      95%  - All compose files (glob)
+    Nx/Angular project.json  90%  - Serve target ports
+    Framework configs        85%  - vite, webpack, next, nuxt
+    .env files             70-85% - PORT=, *_PORT=, localhost URLs
+    Dockerfile               70%  - EXPOSE and ENV PORT directives
 `);
 }
 

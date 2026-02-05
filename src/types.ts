@@ -83,6 +83,15 @@ export interface PortGuardianConfig {
     port: number;
     name?: string;
   }>;
+  detect?: {
+    exclude?: string[];
+  };
+}
+
+export interface DetectOptions {
+  cwd?: string;
+  verbose?: boolean;
+  exclude?: string[];
 }
 
 export interface CliOptions {
