@@ -84,9 +84,15 @@ export async function main(): Promise<void> {
     printInfo(`Checking ${ports.length} port(s) from command line`);
   } else {
     // Auto-detect from project files
-    const spinner = ora('Detecting ports from project files...').start();
-    const sources = await detectPorts({ verbose: options.verbose });
-    spinner.stop();
+    let sources;
+    if (options.verbose) {
+      // Skip spinner when verbose - verbose output is the progress indicator
+      sources = await detectPorts({ verbose: true });
+    } else {
+      const spinner = ora('Detecting ports from project files...').start();
+      sources = await detectPorts();
+      spinner.stop();
+    }
 
     printDetectedPorts(sources);
     ports = sources.map((s) => s.port);

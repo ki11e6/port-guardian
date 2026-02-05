@@ -424,6 +424,21 @@ PORT=3000
       expect(ports).toHaveLength(0);
     });
 
+    it('should not match keys where PORT is a substring of another word', async () => {
+      const env = [
+        'PASSPORT_SECRET=12345',
+        'TRANSPORT_MODE=8080',
+        'EXPORT_PATH=3000',
+        'SUPPORT_EMAIL=4000',
+        'REPORT_DIR=5000',
+      ].join('\n');
+      await writeFile(join(testDir, '.env'), env);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(0);
+    });
+
     it('should detect from .env.local', async () => {
       await writeFile(join(testDir, '.env.local'), 'PORT=9000\n');
 
@@ -545,6 +560,29 @@ PORT=3000
       });
     });
 
+    it('should detect ports from grouped Nx workspace (apps/group/app/project.json)', async () => {
+      await mkdir(join(testDir, 'apps', 'frontend', 'dashboard'), { recursive: true });
+      const project = {
+        name: 'dashboard',
+        targets: {
+          serve: {
+            options: { port: 4300 },
+          },
+        },
+      };
+      await writeFile(join(testDir, 'apps', 'frontend', 'dashboard', 'project.json'), JSON.stringify(project));
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0]).toMatchObject({
+        port: 4300,
+        name: 'dashboard',
+        source: 'apps/frontend/dashboard/project.json',
+        confidence: 90,
+      });
+    });
+
     it('should detect ports from multiple targets', async () => {
       await mkdir(join(testDir, 'apps', 'multi-target'), { recursive: true });
       const project = {
@@ -616,7 +654,9 @@ module.exports = {
       const config = `
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // custom port: 3001
+  serverRuntimeConfig: {
+    port: 3001,
+  },
 };
 export default nextConfig;
 `;
@@ -631,6 +671,27 @@ export default nextConfig;
         source: 'next.config.mjs',
         confidence: 85,
       });
+    });
+
+    it('should skip port numbers inside comments', async () => {
+      const config = `
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  // port: 9999
+  /* port: 8888 */
+  * port: 7777
+  server: {
+    port: 3000,
+  },
+});
+`;
+      await writeFile(join(testDir, 'vite.config.ts'), config);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0].port).toBe(3000);
     });
 
     it('should detect port from process.env fallback pattern', async () => {
@@ -908,6 +969,27 @@ services:
       // Should not throw with verbose enabled
       const ports = await detectPorts({ cwd: testDir, verbose: true });
       expect(ports).toHaveLength(1);
+    });
+
+    it('should respect detect.exclude from .portguardian.yml', async () => {
+      const config = `
+ports:
+  - port: 3000
+    name: App
+detect:
+  exclude:
+    - ".env files"
+    - Dockerfile
+`;
+      await writeFile(join(testDir, '.portguardian.yml'), config);
+      await writeFile(join(testDir, '.env'), 'PORT=4000\n');
+      await writeFile(join(testDir, 'Dockerfile'), 'FROM node:18\nEXPOSE 5000\n');
+
+      const ports = await detectPorts(testDir);
+
+      // Should find port 3000 from config, but NOT 4000 from .env or 5000 from Dockerfile
+      expect(ports).toHaveLength(1);
+      expect(ports[0].port).toBe(3000);
     });
   });
 

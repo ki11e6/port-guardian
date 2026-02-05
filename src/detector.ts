@@ -17,7 +17,10 @@ export async function detectPorts(optionsOrCwd?: string | DetectOptions): Promis
 
   const cwd = opts.cwd ?? process.cwd();
   const verbose = opts.verbose ?? false;
-  const exclude = opts.exclude ?? [];
+
+  // Merge exclude from options and .portguardian.yml config
+  const configExclude = await readConfigExclude(cwd);
+  const exclude = [...(opts.exclude ?? []), ...configExclude];
 
   const sources: PortSource[] = [];
 
@@ -103,7 +106,8 @@ async function detectFromPackageJson(cwd: string): Promise<PortSource[]> {
 
 /**
  * Detect from docker-compose files (95% confidence)
- * Finds all compose files via directory scan + fallback list
+ * Uses regex to find non-standard variants (e.g., docker-compose.dev.yml)
+ * and a fallback list for standard names (docker-compose.yml, compose.yml)
  */
 async function detectFromDockerCompose(cwd: string): Promise<PortSource[]> {
   const composePattern = /^(docker-)?compose[.\-].*\.(yml|yaml)$/;
@@ -111,7 +115,7 @@ async function detectFromDockerCompose(cwd: string): Promise<PortSource[]> {
 
   const matchedFiles = new Set<string>();
 
-  // Scan directory for compose files matching pattern
+  // Scan directory for compose files matching pattern or fallback names
   try {
     const entries = await readdir(cwd);
     for (const entry of entries) {
@@ -132,10 +136,8 @@ async function detectFromDockerCompose(cwd: string): Promise<PortSource[]> {
 
   for (const fileName of matchedFiles) {
     const filePath = join(cwd, fileName);
-    if (await fileExists(filePath)) {
-      const ports = await parseDockerCompose(filePath, fileName);
-      allPorts.push(...ports);
-    }
+    const ports = await parseDockerCompose(filePath, fileName);
+    allPorts.push(...ports);
   }
 
   return allPorts;
@@ -226,8 +228,10 @@ async function detectFromEnvFiles(cwd: string): Promise<PortSource[]> {
         continue;
       }
 
-      // Pattern 2: *_PORT* or *PORT_* keys
-      if (/^[A-Z_]*_PORT[A-Z_]*$/.test(key) || /^[A-Z_]*PORT_[A-Z_]*$/.test(key)) {
+      // Pattern 2: Keys with PORT as a distinct segment (bounded by _ or string edges)
+      // Matches: DB_PORT, REDIS_PORT, PORT_NUMBER, APP_PORT_FORWARD
+      // Rejects: PASSPORT_SECRET, TRANSPORT_MODE, EXPORT_PATH
+      if (/^[A-Z0-9]+_PORT$/.test(key) || /^PORT_[A-Z0-9_]+$/.test(key) || /^[A-Z0-9]+_PORT_[A-Z0-9_]+$/.test(key)) {
         const port = parseInt(value, 10);
         if (isValidPort(port)) {
           const name = key.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
@@ -257,7 +261,7 @@ async function detectFromEnvFiles(cwd: string): Promise<PortSource[]> {
 async function detectFromNxProjects(cwd: string): Promise<PortSource[]> {
   const ports: PortSource[] = [];
 
-  // Scan apps/ and packages/ for project.json
+  // Scan apps/ and packages/ for project.json (supports grouped layouts like apps/group/app/)
   for (const parentDir of ['apps', 'packages']) {
     const parentPath = join(cwd, parentDir);
     try {
@@ -265,17 +269,19 @@ async function detectFromNxProjects(cwd: string): Promise<PortSource[]> {
       for (const entry of entries) {
         const projectJsonPath = join(parentPath, entry, 'project.json');
         if (await fileExists(projectJsonPath)) {
-          const content = await readFile(projectJsonPath, 'utf-8');
-          const project = JSON.parse(content);
-          const projectName = project.name ?? entry;
-
-          if (project.targets && typeof project.targets === 'object') {
-            for (const [, target] of Object.entries(project.targets)) {
-              const port = (target as { options?: { port?: number } })?.options?.port;
-              if (typeof port === 'number' && isValidPort(port)) {
-                ports.push({ port, name: projectName, source: `${parentDir}/${entry}/project.json`, confidence: 90 });
+          extractNxPorts(await readFile(projectJsonPath, 'utf-8'), entry, `${parentDir}/${entry}/project.json`, ports);
+        } else {
+          // Check one level deeper for grouped Nx workspaces (apps/group/app/project.json)
+          try {
+            const subEntries = await readdir(join(parentPath, entry));
+            for (const subEntry of subEntries) {
+              const nestedPath = join(parentPath, entry, subEntry, 'project.json');
+              if (await fileExists(nestedPath)) {
+                extractNxPorts(await readFile(nestedPath, 'utf-8'), subEntry, `${parentDir}/${entry}/${subEntry}/project.json`, ports);
               }
             }
+          } catch {
+            // Not a directory or read error, skip
           }
         }
       }
@@ -331,24 +337,33 @@ async function detectFromFrameworkConfigs(cwd: string): Promise<PortSource[]> {
       }
 
       const content = await readFile(filePath, 'utf-8');
+      const lines = content.split('\n');
 
-      // Match port: <number> with surrounding context
-      const portMatches = content.matchAll(/port\s*:\s*(\d+)/g);
-      for (const match of portMatches) {
-        const port = parseInt(match[1], 10);
-        if (isValidPort(port)) {
-          ports.push({ port, name: config.framework, source: fileName, confidence: 85 });
+      for (const line of lines) {
+        const trimmed = line.trim();
+
+        // Skip comment lines
+        if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) {
+          continue;
         }
-      }
 
-      // Match process.env.X || <number> or process.env.X ?? <number>
-      const fallbackMatches = content.matchAll(/process\.env\.\w+\s*(?:\|\||[\?]{2})\s*(\d+)/g);
-      for (const match of fallbackMatches) {
-        const port = parseInt(match[1], 10);
-        if (isValidPort(port)) {
-          // Only add if not already found via port: pattern
-          if (!ports.some((p) => p.port === port && p.source === fileName)) {
+        // Match port: <number>
+        const portMatch = trimmed.match(/port\s*:\s*(\d+)/);
+        if (portMatch) {
+          const port = parseInt(portMatch[1], 10);
+          if (isValidPort(port)) {
             ports.push({ port, name: config.framework, source: fileName, confidence: 85 });
+          }
+        }
+
+        // Match process.env.X || <number> or process.env.X ?? <number>
+        const fallbackMatch = trimmed.match(/process\.env\.\w+\s*(?:\|\||[\?]{2})\s*(\d+)/);
+        if (fallbackMatch) {
+          const port = parseInt(fallbackMatch[1], 10);
+          if (isValidPort(port)) {
+            if (!ports.some((p) => p.port === port && p.source === fileName)) {
+              ports.push({ port, name: config.framework, source: fileName, confidence: 85 });
+            }
           }
         }
       }
@@ -476,6 +491,38 @@ function parsePortMapping(mapping: string | number | LongSyntaxPort): number | n
   }
 
   return null;
+}
+
+/**
+ * Extract port definitions from an Nx project.json content
+ */
+function extractNxPorts(content: string, fallbackName: string, source: string, ports: PortSource[]): void {
+  const project = JSON.parse(content);
+  const projectName = project.name ?? fallbackName;
+
+  if (project.targets && typeof project.targets === 'object') {
+    for (const [, target] of Object.entries(project.targets)) {
+      const port = (target as { options?: { port?: number } })?.options?.port;
+      if (typeof port === 'number' && isValidPort(port)) {
+        ports.push({ port, name: projectName, source, confidence: 90 });
+      }
+    }
+  }
+}
+
+/**
+ * Read exclude list from .portguardian.yml config if it exists
+ */
+async function readConfigExclude(cwd: string): Promise<string[]> {
+  try {
+    const filePath = join(cwd, '.portguardian.yml');
+    if (!(await fileExists(filePath))) return [];
+    const content = await readFile(filePath, 'utf-8');
+    const config = parseYaml(content) as PortGuardianConfig;
+    return config?.detect?.exclude ?? [];
+  } catch {
+    return [];
+  }
 }
 
 /**
