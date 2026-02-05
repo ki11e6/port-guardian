@@ -34,7 +34,6 @@ export async function detectPorts(optionsOrCwd?: string | DetectOptions): Promis
     { name: 'Dockerfile', fn: detectFromDockerfile },
     { name: 'server entry point', fn: detectFromNestEntry },
     { name: 'package.json scripts', fn: detectFromPackageJsonScripts },
-    { name: 'framework defaults', fn: detectFromFrameworkDefaults },
   ];
 
   for (const detector of detectors) {
@@ -510,65 +509,6 @@ async function detectFromPackageJsonScripts(cwd: string): Promise<PortSource[]> 
       if (isValidPort(port) && !ports.some((p) => p.port === port)) {
         ports.push({ port, name: scriptName, source: 'package.json scripts', confidence: 70 });
       }
-    }
-  }
-
-  return ports;
-}
-
-/**
- * Detect framework default ports when config exists but no port is configured
- */
-async function detectFromFrameworkDefaults(cwd: string): Promise<PortSource[]> {
-  const ports: PortSource[] = [];
-
-  const configs: Array<{ files: string[]; name: string; defaultPort: number }> = [
-    { files: ['vite.config.ts', 'vite.config.js', 'vite.config.mjs'], name: 'Vite', defaultPort: 5173 },
-    { files: ['next.config.js', 'next.config.mjs', 'next.config.ts'], name: 'Next.js', defaultPort: 3000 },
-    { files: ['nuxt.config.js', 'nuxt.config.ts'], name: 'Nuxt', defaultPort: 3000 },
-    { files: ['webpack.config.js', 'webpack.config.ts'], name: 'Webpack', defaultPort: 8080 },
-  ];
-
-  const portPattern = /\bport\s*[:=]\s*\d+|process\.env\.\w*PORT/;
-
-  for (const config of configs) {
-    for (const fileName of config.files) {
-      const filePath = join(cwd, fileName);
-      if (!(await fileExists(filePath))) continue;
-
-      const content = await readFile(filePath, 'utf-8');
-
-      // Only add default if no explicit port is configured
-      if (!portPattern.test(content)) {
-        ports.push({ port: config.defaultPort, name: `${config.name} (default)`, source: fileName, confidence: 50 });
-      }
-
-      break; // Found config for this framework
-    }
-  }
-
-  // Angular: check angular.json for projects without serve port
-  const angularPath = join(cwd, 'angular.json');
-  if (await fileExists(angularPath)) {
-    try {
-      const content = await readFile(angularPath, 'utf-8');
-      const config = JSON.parse(content);
-
-      if (config.projects && typeof config.projects === 'object') {
-        let hasAnyPort = false;
-        for (const project of Object.values(config.projects)) {
-          if ((project as { architect?: { serve?: { options?: { port?: number } } } })
-            ?.architect?.serve?.options?.port) {
-            hasAnyPort = true;
-            break;
-          }
-        }
-        if (!hasAnyPort) {
-          ports.push({ port: 4200, name: 'Angular (default)', source: 'angular.json', confidence: 50 });
-        }
-      }
-    } catch {
-      // Parse error
     }
   }
 

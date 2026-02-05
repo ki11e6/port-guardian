@@ -119,12 +119,19 @@ describe('index - exports', () => {
     const exports = await import('../src/index.js');
 
     expect(typeof exports.scan).toBe('function');
+    expect(typeof exports.killPort).toBe('function');
     expect(typeof exports.detectPorts).toBe('function');
     expect(typeof exports.checkPort).toBe('function');
     expect(typeof exports.checkPorts).toBe('function');
-    expect(typeof exports.resolveBlocker).toBe('function');
-    expect(typeof exports.generateWarnings).toBe('function');
-    expect(typeof exports.isDockerAvailable).toBe('function');
-    expect(typeof exports.killBlocker).toBe('function');
+    expect(typeof exports.findAvailablePort).toBe('function');
+  });
+
+  it('should not export internal functions', async () => {
+    const exports = await import('../src/index.js') as Record<string, unknown>;
+
+    expect(exports.resolveBlocker).toBeUndefined();
+    expect(exports.generateWarnings).toBeUndefined();
+    expect(exports.isDockerAvailable).toBeUndefined();
+    expect(exports.killBlocker).toBeUndefined();
   });
 });

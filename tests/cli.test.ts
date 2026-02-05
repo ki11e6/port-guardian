@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { parse as parseYaml } from 'yaml';
-import { generatePortGuardianYaml } from '../src/cli.js';
+import { generatePortGuardianYaml, main } from '../src/cli.js';
 import type { PortSource } from '../src/types.js';
 
 describe('generatePortGuardianYaml', () => {
@@ -68,5 +68,111 @@ describe('generatePortGuardianYaml', () => {
 
     expect(parsed.ports).toHaveLength(5);
     expect(parsed.ports.map((p: { port: number }) => p.port)).toEqual([3000, 4200, 5432, 6379, 8080]);
+  });
+});
+
+describe('CLI main()', () => {
+  let savedArgv: string[];
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    savedArgv = process.argv;
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation((code?: number) => {
+      throw new Error(`EXIT:${code ?? 0}`);
+    });
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    process.argv = savedArgv;
+    vi.restoreAllMocks();
+  });
+
+  function setArgs(...args: string[]) {
+    process.argv = ['node', 'port-guardian', ...args];
+  }
+
+  async function run(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    setArgs(...args);
+    let code = 0;
+    try {
+      await main();
+    } catch (e: unknown) {
+      const msg = (e as Error).message;
+      const match = msg.match(/^EXIT:(\d+)$/);
+      if (match) {
+        code = parseInt(match[1], 10);
+      } else {
+        throw e;
+      }
+    }
+    const stdout = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    const stderr = errorSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    return { code, stdout, stderr };
+  }
+
+  it('--help prints usage and exits 0', async () => {
+    const { code, stdout } = await run('--help');
+    expect(code).toBe(0);
+    expect(stdout).toContain('Usage:');
+    expect(stdout).toContain('port-guardian');
+  });
+
+  it('--version prints version and exits 0', async () => {
+    const { code, stdout } = await run('--version');
+    expect(code).toBe(0);
+    expect(stdout).toMatch(/port-guardian v\d+\.\d+\.\d+/);
+  });
+
+  it('--find returns a port number >= 49200', async () => {
+    const { code, stdout } = await run('--find', '49200');
+    expect(code).toBe(0);
+    const port = parseInt(stdout.trim(), 10);
+    expect(port).toBeGreaterThanOrEqual(49200);
+    expect(port).toBeLessThanOrEqual(65535);
+  });
+
+  it('--find --json returns JSON with port', async () => {
+    const { code, stdout } = await run('--find', '--json');
+    expect(code).toBe(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed).toHaveProperty('port');
+    expect(typeof parsed.port).toBe('number');
+  });
+
+  it('--find --kill conflicts and exits 1', async () => {
+    const { code } = await run('--find', '--kill');
+    expect(code).toBe(1);
+  });
+
+  it('--kill without port exits 1', async () => {
+    const { code } = await run('--kill');
+    expect(code).toBe(1);
+  });
+
+  it('--kill on free port reports already available and exits 0', async () => {
+    const { code, stdout } = await run('--kill', '59870');
+    expect(code).toBe(0);
+    expect(stdout).toContain('already available');
+  });
+
+  it('--kill --json on free port returns JSON with wasAvailable', async () => {
+    const { code, stdout } = await run('--kill', '59871', '--json');
+    expect(code).toBe(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.wasAvailable).toBe(true);
+  });
+
+  it('invalid port exits 1', async () => {
+    const { code } = await run('--kill', '99999');
+    expect(code).toBe(1);
+  });
+
+  it('--ci with no detected ports exits 1', async () => {
+    const { code } = await run('--ci');
+    expect(code).toBe(1);
   });
 });

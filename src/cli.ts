@@ -7,7 +7,10 @@ import { readFileSync } from 'node:fs';
 import { writeFile, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import inquirer from 'inquirer';
+async function getInquirer() {
+  const { default: inquirer } = await import('inquirer');
+  return inquirer;
+}
 
 // Get version from package.json
 const __filename = fileURLToPath(import.meta.url);
@@ -227,6 +230,7 @@ async function interactiveResolve(
   options: CliOptions
 ): Promise<void> {
   const blockedPorts = portStatuses.filter((p) => !p.available && p.blocker);
+  const inquirer = await getInquirer();
 
   for (const port of blockedPorts) {
     const blocker = port.blocker!;
@@ -323,6 +327,7 @@ async function initCommand(force: boolean, ci: boolean): Promise<void> {
   const configExists = await stat(configPath).then(() => true, () => false);
   if (configExists) {
     if (!force && !ci) {
+      const inquirer = await getInquirer();
       const { overwrite } = await inquirer.prompt([{
         type: 'confirm',
         name: 'overwrite',
@@ -353,6 +358,7 @@ async function initCommand(force: boolean, ci: boolean): Promise<void> {
 
   // Confirm before writing
   if (!force && !ci) {
+    const inquirer = await getInquirer();
     const { confirm } = await inquirer.prompt([{
       type: 'confirm',
       name: 'confirm',
@@ -436,7 +442,6 @@ function printHelp(): void {
     .env files             70-85% - PORT=, *_PORT=, localhost URLs
     package.json scripts     70%  - --port flags in npm scripts
     Dockerfile               70%  - EXPOSE and ENV PORT directives
-    Framework defaults       50%  - Inferred defaults (Vite=5173, etc.)
 `);
 }
 

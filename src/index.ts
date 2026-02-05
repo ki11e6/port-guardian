@@ -6,8 +6,6 @@
 
 export { detectPorts } from './detector.js';
 export { checkPort, checkPorts, findAvailablePort } from './scanner.js';
-export { resolveBlocker, generateWarnings, isDockerAvailable } from './resolver.js';
-export { killBlocker, type KillResult } from './killer.js';
 
 export type {
   PortSource,
@@ -18,7 +16,6 @@ export type {
   DockerInfo,
   RestartPolicy,
   ContainerState,
-  ResolutionAction,
   PortGuardianConfig,
   DetectOptions,
 } from './types.js';

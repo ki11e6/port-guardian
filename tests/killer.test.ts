@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { killBlocker } from '../src/killer.js';
@@ -271,23 +271,40 @@ describe('killPort', () => {
   });
 
   it('should kill a process occupying a port', async () => {
-    // Spawn a child process that listens on a port so we can kill it
-    const server = createServer();
-    await new Promise<void>((resolve) => server.listen(59852, '127.0.0.1', resolve));
+    const child = spawn(process.execPath, ['-e', `
+      const net = require('net');
+      const server = net.createServer();
+      server.listen(59852, '127.0.0.1', () => {
+        process.stdout.write('READY\\n');
+      });
+      setInterval(() => {}, 60000);
+    `], { stdio: ['pipe', 'pipe', 'pipe'] });
 
-    const result = await killPort(59852);
+    try {
+      // Wait for READY signal
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Child process did not become ready')), 5000);
+        child.stdout!.on('data', (data: Buffer) => {
+          if (data.toString().includes('READY')) {
+            clearTimeout(timeout);
+            resolve();
+          }
+        });
+        child.on('error', (err) => { clearTimeout(timeout); reject(err); });
+        child.on('exit', (code) => { clearTimeout(timeout); reject(new Error(`Child exited early with code ${code}`)); });
+      });
 
-    expect(result.port).toBe(59852);
-    expect(result.wasAvailable).toBe(false);
-    expect(result.blocker).toBeDefined();
-    expect(result.blocker?.pid).toBeGreaterThan(0);
-    expect(result.command).toBeDefined();
+      const result = await killPort(59852);
 
-    // The kill may target our own process's PID since the server runs in-process.
-    // If killed=true, the port should now be free.
-    // If killed=false, it might be because killing our own process is tricky.
-    // Either way, clean up.
-    try { server.close(); } catch { /* already closed or process killed */ }
+      expect(result.port).toBe(59852);
+      expect(result.wasAvailable).toBe(false);
+      expect(result.killed).toBe(true);
+      expect(result.blocker).toBeDefined();
+      expect(result.blocker?.pid).toBe(child.pid);
+      expect(result.command).toBeDefined();
+    } finally {
+      try { child.kill('SIGKILL'); } catch { /* already dead */ }
+    }
   });
 
   it('should throw on invalid port number', async () => {
