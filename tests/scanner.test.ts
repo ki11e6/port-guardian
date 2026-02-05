@@ -120,9 +120,9 @@ describe('scanner - Docker detection', () => {
   const testPort = 59800;
 
   beforeAll(async () => {
-    // Check if Docker is available
+    // Check if Docker is available (with timeout to avoid hanging on CI)
     try {
-      await execAsync('docker info >/dev/null 2>&1');
+      await execAsync('docker info >/dev/null 2>&1', { timeout: 5000 });
       dockerAvailable = true;
     } catch {
       dockerAvailable = false;
@@ -132,7 +132,8 @@ describe('scanner - Docker detection', () => {
       // Start a test container
       try {
         const { stdout } = await execAsync(
-          `docker run -d --name test-scanner-${testPort} -p ${testPort}:80 nginx:alpine 2>/dev/null`
+          `docker run -d --name test-scanner-${testPort} -p ${testPort}:80 nginx:alpine 2>/dev/null`,
+          { timeout: 15000 }
         );
         testContainerId = stdout.trim();
         // Wait for container to start
@@ -141,18 +142,18 @@ describe('scanner - Docker detection', () => {
         testContainerId = null;
       }
     }
-  });
+  }, 30000);
 
   afterAll(async () => {
     if (testContainerId) {
       try {
-        await execAsync(`docker stop test-scanner-${testPort} 2>/dev/null`);
-        await execAsync(`docker rm test-scanner-${testPort} 2>/dev/null`);
+        await execAsync(`docker stop test-scanner-${testPort} 2>/dev/null`, { timeout: 10000 });
+        await execAsync(`docker rm test-scanner-${testPort} 2>/dev/null`, { timeout: 5000 });
       } catch {
         // Ignore cleanup errors
       }
     }
-  });
+  }, 20000);
 
   it('should detect Docker container blocking port', async () => {
     if (!dockerAvailable || !testContainerId) {

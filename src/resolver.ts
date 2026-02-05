@@ -19,7 +19,7 @@ const execAsync = promisify(exec);
  */
 export async function isDockerAvailable(): Promise<boolean> {
   try {
-    await execAsync('docker info >/dev/null 2>&1');
+    await execAsync('docker info >/dev/null 2>&1', { timeout: 5000 });
     return true;
   } catch {
     return false;

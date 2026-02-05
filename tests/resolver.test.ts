@@ -200,7 +200,8 @@ describe('resolver - Docker integration', () => {
     if (dockerAvailable) {
       try {
         const { stdout } = await execAsync(
-          `docker run -d --name test-resolver-${testPort} --restart=always -p ${testPort}:80 nginx:alpine 2>/dev/null`
+          `docker run -d --name test-resolver-${testPort} --restart=always -p ${testPort}:80 nginx:alpine 2>/dev/null`,
+          { timeout: 15000 }
         );
         testContainerId = stdout.trim();
         await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -208,18 +209,18 @@ describe('resolver - Docker integration', () => {
         testContainerId = null;
       }
     }
-  });
+  }, 30000);
 
   afterAll(async () => {
     if (testContainerId) {
       try {
-        await execAsync(`docker stop test-resolver-${testPort} 2>/dev/null`);
-        await execAsync(`docker rm test-resolver-${testPort} 2>/dev/null`);
+        await execAsync(`docker stop test-resolver-${testPort} 2>/dev/null`, { timeout: 10000 });
+        await execAsync(`docker rm test-resolver-${testPort} 2>/dev/null`, { timeout: 5000 });
       } catch {
         // Ignore cleanup errors
       }
     }
-  });
+  }, 20000);
 
   describe('findContainerByPort', () => {
     it('should find container by port', async () => {
