@@ -5,7 +5,7 @@
  */
 
 export { detectPorts } from './detector.js';
-export { checkPort, checkPorts } from './scanner.js';
+export { checkPort, checkPorts, findAvailablePort } from './scanner.js';
 export { resolveBlocker, generateWarnings, isDockerAvailable } from './resolver.js';
 export { killBlocker } from './killer.js';
 
@@ -28,9 +28,10 @@ export type {
  * High-level API: Scan ports and return results
  */
 import { detectPorts } from './detector.js';
-import { checkPorts } from './scanner.js';
+import { checkPort, checkPorts } from './scanner.js';
 import { resolveBlocker, generateWarnings } from './resolver.js';
-import type { PortStatus, ScanResult } from './types.js';
+import { killBlocker } from './killer.js';
+import type { PortStatus, ScanResult, BlockerType } from './types.js';
 
 export interface ScanOptions {
   ports?: number[];
@@ -108,5 +109,80 @@ export async function scan(options: ScanOptions = {}): Promise<ScanResult> {
     ports: portStatuses,
     hasConflicts: portStatuses.some((p) => !p.available),
     conflictCount: portStatuses.filter((p) => !p.available).length,
+  };
+}
+
+export interface KillPortResult {
+  port: number;
+  killed: boolean;
+  wasAvailable: boolean;
+  blocker?: {
+    pid: number;
+    process: string;
+    type: BlockerType;
+    docker?: { containerName: string; image: string };
+  };
+  command?: string;
+  error?: string;
+}
+
+/**
+ * Kill the process occupying a port.
+ * If the port is already available, returns immediately with wasAvailable: true.
+ *
+ * @example
+ * ```ts
+ * import { killPort } from 'port-guardian';
+ *
+ * const result = await killPort(3000);
+ * console.log(result.killed); // true
+ * ```
+ */
+export async function killPort(
+  port: number,
+  options: { dryRun?: boolean; force?: boolean } = {}
+): Promise<KillPortResult> {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid port: ${port}. Must be an integer between 1 and 65535.`);
+  }
+
+  const scan = await checkPort(port);
+
+  if (scan.available) {
+    return { port, killed: false, wasAvailable: true };
+  }
+
+  if (!scan.process) {
+    return {
+      port,
+      killed: false,
+      wasAvailable: false,
+      error: 'Could not identify blocking process. Try running with sudo.',
+    };
+  }
+
+  const blocker = await resolveBlocker(scan.process, port);
+  const result = await killBlocker(blocker, options);
+
+  const blockerInfo: KillPortResult['blocker'] = {
+    pid: blocker.pid,
+    process: blocker.processName,
+    type: blocker.type,
+  };
+
+  if (blocker.docker) {
+    blockerInfo.docker = {
+      containerName: blocker.docker.containerName,
+      image: blocker.docker.image,
+    };
+  }
+
+  return {
+    port,
+    killed: result.success,
+    wasAvailable: false,
+    blocker: blockerInfo,
+    command: result.command,
+    error: result.error,
   };
 }

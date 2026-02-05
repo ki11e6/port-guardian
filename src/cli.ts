@@ -17,9 +17,10 @@ const packageJson = JSON.parse(
 const VERSION = packageJson.version;
 import ora from 'ora';
 import { detectPorts } from './detector.js';
-import { checkPorts } from './scanner.js';
+import { checkPorts, findAvailablePort } from './scanner.js';
 import { resolveBlocker, generateWarnings } from './resolver.js';
 import { killBlocker } from './killer.js';
+import { killPort } from './index.js';
 import {
   printHeader,
   printDetectedPorts,
@@ -33,6 +34,21 @@ import {
 import type { PortStatus, ScanResult, CliOptions, Blocker } from './types.js';
 
 /**
+ * Parse and validate port strings, returning valid port numbers or exiting on error
+ */
+function parseAndValidatePorts(positionals: string[]): number[] {
+  const parsed = positionals.map((p) => parseInt(p, 10));
+  const invalidEntries = positionals.filter((_, i) => isNaN(parsed[i]) || parsed[i] < 1 || parsed[i] > 65535);
+
+  if (invalidEntries.length > 0) {
+    printError(`Invalid port(s): ${invalidEntries.join(', ')}. Ports must be 1-65535.`);
+    process.exit(1);
+  }
+
+  return parsed;
+}
+
+/**
  * Main CLI entry point
  */
 export async function main(): Promise<void> {
@@ -43,6 +59,9 @@ export async function main(): Promise<void> {
       ci: { type: 'boolean', default: false },
       'dry-run': { type: 'boolean', default: false },
       verbose: { type: 'boolean', short: 'v', default: false },
+      find: { type: 'boolean', default: false },
+      kill: { type: 'boolean', short: 'k', default: false },
+      json: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
       version: { type: 'boolean', default: false },
     },
@@ -56,6 +75,63 @@ export async function main(): Promise<void> {
   if (values.version) {
     console.log(`port-guardian v${VERSION}`);
     process.exit(0);
+  }
+
+  // Check for conflicting flags
+  if (values.find && values.kill) {
+    printError('Cannot use --find and --kill together.');
+    process.exit(1);
+  }
+
+  // --find mode: find an available port and print it
+  if (values.find) {
+    let basePort: number | undefined;
+
+    if (positionals.length > 0) {
+      const parsed = parseAndValidatePorts([positionals[0]]);
+      basePort = parsed[0];
+    }
+
+    const available = await findAvailablePort(basePort);
+    if (values.json) {
+      console.log(JSON.stringify({ port: available }));
+    } else {
+      console.log(available);
+    }
+    process.exit(0);
+  }
+
+  // --kill mode: kill process on given port(s) and exit
+  if (values.kill) {
+    if (positionals.length === 0) {
+      printError('--kill requires at least one port. Usage: port-guardian --kill 3000');
+      process.exit(1);
+    }
+
+    const parsedPorts = parseAndValidatePorts(positionals);
+
+    const dryRun = values['dry-run'] ?? false;
+    const results = await Promise.all(
+      parsedPorts.map((port) => killPort(port, { dryRun }))
+    );
+    const hasErrors = results.some((r) => !r.killed && !r.wasAvailable);
+
+    if (values.json) {
+      console.log(JSON.stringify(results.length === 1 ? results[0] : results));
+    } else {
+      for (const r of results) {
+        if (r.wasAvailable) {
+          console.log(`Port ${r.port}: already available`);
+        } else if (r.killed) {
+          const action = dryRun ? 'would kill' : 'killed';
+          console.log(`Port ${r.port}: ${action} ${r.blocker?.process ?? 'unknown'} (PID ${r.blocker?.pid ?? '?'})${dryRun ? ' (dry-run)' : ''}`);
+        } else {
+          console.error(`Port ${r.port}: failed - ${r.error}`);
+        }
+      }
+    }
+
+    process.exit(hasErrors ? 1 : 0);
   }
 
   const options: CliOptions = {
@@ -72,15 +148,7 @@ export async function main(): Promise<void> {
 
   if (positionals.length > 0) {
     // Explicit ports from CLI args with validation
-    const parsedPorts = positionals.map((p) => parseInt(p, 10));
-    const invalidPorts = parsedPorts.filter((p) => isNaN(p) || p < 1 || p > 65535);
-
-    if (invalidPorts.length > 0) {
-      printError(`Invalid port(s): ${positionals.filter((_, i) => isNaN(parsedPorts[i]) || parsedPorts[i] < 1 || parsedPorts[i] > 65535).join(', ')}. Ports must be 1-65535.`);
-      process.exit(1);
-    }
-
-    ports = parsedPorts;
+    ports = parseAndValidatePorts(positionals);
     printInfo(`Checking ${ports.length} port(s) from command line`);
   } else {
     // Auto-detect from project files
@@ -296,8 +364,11 @@ function printHelp(): void {
 
   Options:
     -f, --force     Kill all blockers without prompting
+    -k, --kill      Kill process on port(s) and exit
     --ci            Non-interactive mode (exit 1 on conflicts)
     --dry-run       Show what would be done without executing
+    --find [port]   Find an available port (starting from port, or random)
+    --json          Output as JSON (use with --find or --kill)
     -v, --verbose   Verbose output
     -h, --help      Show this help message
     --version       Show version
@@ -307,6 +378,12 @@ function printHelp(): void {
     port-guardian 3000 8080        # Check specific ports
     port-guardian --force          # Kill all blockers
     port-guardian --ci             # CI mode (fail on conflicts)
+    port-guardian --kill 3000      # Kill whatever is on port 3000
+    port-guardian -k 3000 8080     # Kill multiple ports
+    port-guardian --kill 3000 --json  # Kill with JSON output
+    port-guardian --find 3000      # Find available port from 3000
+    port-guardian --find           # Find random available port
+    port-guardian --find --json    # Output as JSON: {"port": 3001}
 
   Port Detection Sources (auto-detect order):
     .portguardian.yml       100%  - Explicit port configuration

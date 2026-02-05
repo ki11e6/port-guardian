@@ -187,6 +187,42 @@ async function findDockerProxyPid(port: number): Promise<number | null> {
 }
 
 /**
+ * Find the first available port starting from a base port.
+ * Walks upward from basePort, returning the first port that is not in use.
+ * If no basePort is provided, picks a random ephemeral port (49152-65535).
+ *
+ * @param basePort - Port to start searching from (default: random ephemeral)
+ * @param maxAttempts - Maximum number of ports to try (default: 100)
+ * @returns The first available port number
+ * @throws Error if no available port is found within maxAttempts
+ */
+export async function findAvailablePort(
+  basePort?: number,
+  maxAttempts = 100
+): Promise<number> {
+  if (basePort !== undefined && (!Number.isInteger(basePort) || basePort < 1 || basePort > 65535)) {
+    throw new Error(`Invalid port: ${basePort}. Must be an integer between 1 and 65535.`);
+  }
+
+  const start =
+    basePort ?? Math.floor(Math.random() * (65535 - 49152 + 1)) + 49152;
+
+  for (let i = 0; i < maxAttempts; i++) {
+    const port = start + i;
+    if (port > 65535) break;
+
+    const result = await checkPort(port);
+    if (result.available) {
+      return port;
+    }
+  }
+
+  throw new Error(
+    `No available port found after ${maxAttempts} attempts (starting from ${start})`
+  );
+}
+
+/**
  * Check multiple ports in parallel
  */
 export async function checkPorts(

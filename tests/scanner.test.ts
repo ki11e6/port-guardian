@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { exec } from 'node:child_process';
+import { createServer } from 'node:net';
 import { promisify } from 'node:util';
-import { checkPort, checkPorts } from '../src/scanner.js';
+import { checkPort, checkPorts, findAvailablePort } from '../src/scanner.js';
 
 const execAsync = promisify(exec);
 
@@ -57,6 +58,59 @@ describe('scanner', () => {
       expect(results.has(59990)).toBe(true);
       expect(results.has(59991)).toBe(true);
     });
+  });
+});
+
+describe('findAvailablePort', () => {
+  it('should return the base port when it is available', async () => {
+    const port = await findAvailablePort(59950);
+    expect(port).toBe(59950);
+  });
+
+  it('should skip occupied ports and return the next available', async () => {
+    // Bind a port so findAvailablePort has to skip it
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(59960, '127.0.0.1', resolve));
+
+    try {
+      const port = await findAvailablePort(59960);
+      expect(port).toBe(59961);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('should return a valid ephemeral port when no base port is given', async () => {
+    const port = await findAvailablePort();
+    expect(port).toBeGreaterThanOrEqual(49152);
+    expect(port).toBeLessThanOrEqual(65535);
+  });
+
+  it('should throw when no port is available within maxAttempts', async () => {
+    // Use maxAttempts=1 on a port we know is in use
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(59970, '127.0.0.1', resolve));
+
+    try {
+      await expect(findAvailablePort(59970, 1)).rejects.toThrow(
+        'No available port found after 1 attempts'
+      );
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('should throw on invalid base port', async () => {
+    await expect(findAvailablePort(0)).rejects.toThrow('Invalid port: 0');
+    await expect(findAvailablePort(-1)).rejects.toThrow('Invalid port: -1');
+    await expect(findAvailablePort(70000)).rejects.toThrow('Invalid port: 70000');
+    await expect(findAvailablePort(3.5)).rejects.toThrow('Invalid port: 3.5');
+  });
+
+  it('should stop before exceeding port 65535', async () => {
+    // Start from a high port - should not throw even if it runs out of range
+    // (it throws the generic "no port found" error, not an out-of-range crash)
+    await expect(findAvailablePort(65535, 5)).resolves.toBe(65535);
   });
 });
 
