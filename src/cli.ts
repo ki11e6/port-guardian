@@ -26,14 +26,14 @@ import { scan, killPort } from './index.js';
 import {
   printHeader,
   printDetectedPorts,
-  printScanResults,
   printRestartWarning,
   printSuccess,
   printError,
   printInfo,
-  printSummary,
+  printScanOutput,
+  printKillResult,
 } from './ui.js';
-import type { PortStatus, CliOptions, Blocker, PortSource } from './types.js';
+import type { PortStatus, CliOptions, Blocker, PortSource, OutputContext } from './types.js';
 
 /**
  * Parse and validate port strings, returning valid port numbers or exiting on error
@@ -129,14 +129,7 @@ export async function main(): Promise<void> {
       console.log(JSON.stringify(results.length === 1 ? results[0] : results));
     } else {
       for (const r of results) {
-        if (r.wasAvailable) {
-          console.log(`Port ${r.port}: already available`);
-        } else if (r.killed) {
-          const action = dryRun ? 'would kill' : 'killed';
-          console.log(`Port ${r.port}: ${action} ${r.blocker?.process ?? 'unknown'} (PID ${r.blocker?.pid ?? '?'})${dryRun ? ' (dry-run)' : ''}`);
-        } else {
-          console.error(`Port ${r.port}: failed - ${r.error}`);
-        }
+        printKillResult(r, dryRun);
       }
     }
 
@@ -150,21 +143,23 @@ export async function main(): Promise<void> {
     verbose: values.verbose ?? false,
   };
 
-  printHeader();
+  // Determine output context
+  const context: OutputContext = {
+    mode: positionals.length === 0 ? 'auto-detect'
+        : positionals.length === 1 ? 'single'
+        : 'multi',
+  };
 
   // Get ports to check
   let ports: number[];
 
-  if (positionals.length > 0) {
-    // Explicit ports from CLI args with validation
-    ports = parseAndValidatePorts(positionals);
-    printInfo(`Checking ${ports.length} port(s) from command line`);
-  } else {
-    // Auto-detect from project files
+  if (context.mode === 'auto-detect') {
+    printHeader();
     const sources = await detectPorts(options.verbose ? { verbose: true } : undefined);
-
     printDetectedPorts(sources);
     ports = sources.map((s) => s.port);
+  } else {
+    ports = parseAndValidatePorts(positionals);
   }
 
   if (ports.length === 0) {
@@ -178,11 +173,9 @@ export async function main(): Promise<void> {
   // Scan ports
   const scanResult = await scan({ ports });
 
-  printScanResults(scanResult);
-  printSummary(scanResult);
+  printScanOutput(scanResult, context);
 
   if (!scanResult.hasConflicts) {
-    printSuccess('All ports are available!');
     process.exit(0);
   }
 

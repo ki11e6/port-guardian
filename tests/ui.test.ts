@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { PortStatus, ScanResult, PortSource, Blocker } from '../src/types.js';
+import type { KillPortResult } from '../src/index.js';
 
 // Mock console.log to capture output
 let consoleOutput: string[] = [];
@@ -250,6 +251,234 @@ describe('ui', () => {
       const output = consoleOutput.join('\n');
       expect(output).toContain('2 available');
       expect(output).toContain('1 blocked');
+    });
+  });
+
+  describe('printCompactResult', () => {
+    it('should print single line for available port', async () => {
+      const { printCompactResult } = await import('../src/ui.js');
+
+      printCompactResult({ port: 3000, available: true, warnings: [] });
+
+      const output = consoleOutput.join('\n');
+      expect(output).toContain('Port 3000 available');
+      expect(output).not.toContain('Port Status:');
+    });
+
+    it('should print compact blocked output without duplicating process info', async () => {
+      const { printCompactResult } = await import('../src/ui.js');
+
+      const blocker: Blocker = {
+        type: 'native',
+        pid: 1234,
+        processName: 'node',
+        isOrphanedDockerProxy: false,
+        hasRestartLoop: false,
+        suggestedAction: 'kill-process',
+        suggestedCommand: 'kill 1234',
+        requiresSudo: false,
+        safeToAutoKill: false,
+        isPermanentFix: true,
+      };
+
+      printCompactResult({ port: 3000, available: false, blocker, warnings: [] });
+
+      const output = consoleOutput.join('\n');
+      expect(output).toContain('Port 3000 blocked by node (PID 1234)');
+      // Should NOT duplicate process info via printBlockerDetails
+      expect(output).not.toContain('Process:');
+    });
+  });
+
+  describe('printKillResult', () => {
+    it('should print already available', async () => {
+      const { printKillResult } = await import('../src/ui.js');
+
+      const r: KillPortResult = { port: 3000, killed: false, wasAvailable: true };
+      printKillResult(r, false);
+
+      const output = consoleOutput.join('\n');
+      expect(output).toContain('Port 3000 already available');
+    });
+
+    it('should print killed', async () => {
+      const { printKillResult } = await import('../src/ui.js');
+
+      const r: KillPortResult = {
+        port: 3000, killed: true, wasAvailable: false,
+        blocker: { pid: 1234, process: 'node', type: 'native' },
+        command: 'kill 1234',
+      };
+      printKillResult(r, false);
+
+      const output = consoleOutput.join('\n');
+      expect(output).toContain('Port 3000: killed node (PID 1234)');
+    });
+
+    it('should print dry-run', async () => {
+      const { printKillResult } = await import('../src/ui.js');
+
+      const r: KillPortResult = {
+        port: 3000, killed: true, wasAvailable: false,
+        blocker: { pid: 1234, process: 'node', type: 'native' },
+        command: 'kill 1234',
+      };
+      printKillResult(r, true);
+
+      const output = consoleOutput.join('\n');
+      expect(output).toContain('would kill');
+      expect(output).toContain('(dry-run)');
+    });
+
+    it('should print failed', async () => {
+      const { printKillResult } = await import('../src/ui.js');
+
+      const r: KillPortResult = {
+        port: 3000, killed: false, wasAvailable: false, error: 'permission denied',
+      };
+      printKillResult(r, false);
+
+      const output = consoleOutput.join('\n');
+      expect(output).toContain('Port 3000: failed - permission denied');
+    });
+  });
+
+  describe('printScanOutput', () => {
+    it('should use compact output for single mode', async () => {
+      const { printScanOutput } = await import('../src/ui.js');
+
+      const result: ScanResult = {
+        ports: [{ port: 3000, available: true, warnings: [] }],
+        hasConflicts: false,
+        conflictCount: 0,
+      };
+
+      printScanOutput(result, { mode: 'single' });
+
+      const output = consoleOutput.join('\n');
+      expect(output).toContain('Port 3000 available');
+      expect(output).not.toContain('Port Status:');
+      expect(output).not.toContain('Summary:');
+    });
+
+    it('should show all-available message for multi mode', async () => {
+      const { printScanOutput } = await import('../src/ui.js');
+
+      const result: ScanResult = {
+        ports: [
+          { port: 3000, available: true, warnings: [] },
+          { port: 8080, available: true, warnings: [] },
+        ],
+        hasConflicts: false,
+        conflictCount: 0,
+      };
+
+      printScanOutput(result, { mode: 'multi' });
+
+      const output = consoleOutput.join('\n');
+      expect(output).toContain('Port Status:');
+      expect(output).toContain('All 2 ports available');
+      expect(output).not.toContain('Summary:');
+    });
+
+    it('should show summary for multi mode with conflicts', async () => {
+      const { printScanOutput } = await import('../src/ui.js');
+
+      const blocker: Blocker = {
+        type: 'native', pid: 1234, processName: 'node',
+        isOrphanedDockerProxy: false, hasRestartLoop: false,
+        suggestedAction: 'kill-process', suggestedCommand: 'kill 1234',
+        requiresSudo: false, safeToAutoKill: false, isPermanentFix: true,
+      };
+
+      const result: ScanResult = {
+        ports: [
+          { port: 3000, available: true, warnings: [] },
+          { port: 8080, available: false, blocker, warnings: [] },
+        ],
+        hasConflicts: true,
+        conflictCount: 1,
+      };
+
+      printScanOutput(result, { mode: 'multi' });
+
+      const output = consoleOutput.join('\n');
+      expect(output).toContain('Port Status:');
+      expect(output).toContain('Summary:');
+      expect(output).toContain('1 available');
+      expect(output).toContain('1 blocked');
+    });
+
+    it('should use compact output for single blocked port', async () => {
+      const { printScanOutput } = await import('../src/ui.js');
+
+      const blocker: Blocker = {
+        type: 'native', pid: 1234, processName: 'node',
+        isOrphanedDockerProxy: false, hasRestartLoop: false,
+        suggestedAction: 'kill-process', suggestedCommand: 'kill 1234',
+        requiresSudo: false, safeToAutoKill: false, isPermanentFix: true,
+      };
+
+      const result: ScanResult = {
+        ports: [{ port: 3000, available: false, blocker, warnings: [] }],
+        hasConflicts: true,
+        conflictCount: 1,
+      };
+
+      printScanOutput(result, { mode: 'single' });
+
+      const output = consoleOutput.join('\n');
+      expect(output).toContain('Port 3000 blocked by node (PID 1234)');
+      expect(output).not.toContain('Port Status:');
+    });
+
+    it('should show summary for auto-detect mode with conflicts', async () => {
+      const { printScanOutput } = await import('../src/ui.js');
+
+      const blocker: Blocker = {
+        type: 'native', pid: 5678, processName: 'python',
+        isOrphanedDockerProxy: false, hasRestartLoop: false,
+        suggestedAction: 'kill-process', suggestedCommand: 'kill 5678',
+        requiresSudo: false, safeToAutoKill: false, isPermanentFix: true,
+      };
+
+      const result: ScanResult = {
+        ports: [
+          { port: 3000, available: true, warnings: [] },
+          { port: 8080, available: false, blocker, warnings: [] },
+        ],
+        hasConflicts: true,
+        conflictCount: 1,
+      };
+
+      printScanOutput(result, { mode: 'auto-detect' });
+
+      const output = consoleOutput.join('\n');
+      expect(output).toContain('Port Status:');
+      expect(output).toContain('Summary:');
+      expect(output).toContain('1 available');
+      expect(output).toContain('1 blocked');
+      expect(output).not.toContain('All ports are available!');
+    });
+
+    it('should show full output with summary for auto-detect mode', async () => {
+      const { printScanOutput } = await import('../src/ui.js');
+
+      const result: ScanResult = {
+        ports: [
+          { port: 3000, available: true, warnings: [] },
+          { port: 8080, available: true, warnings: [] },
+        ],
+        hasConflicts: false,
+        conflictCount: 0,
+      };
+
+      printScanOutput(result, { mode: 'auto-detect' });
+
+      const output = consoleOutput.join('\n');
+      expect(output).toContain('Port Status:');
+      expect(output).toContain('Summary:');
+      expect(output).toContain('All ports are available!');
     });
   });
 });

@@ -175,4 +175,18 @@ describe('CLI main()', () => {
     const { code } = await run('--ci');
     expect(code).toBe(1);
   });
+
+  it('single explicit port produces compact output without Port Status header', async () => {
+    const { code, stdout } = await run('59872');
+    expect(code).toBe(0);
+    expect(stdout).toContain('Port 59872 available');
+    expect(stdout).not.toContain('Port Status:');
+  });
+
+  it('multiple explicit ports produce Port Status header', async () => {
+    const { code, stdout } = await run('59873', '59874');
+    expect(code).toBe(0);
+    expect(stdout).toContain('Port Status:');
+    expect(stdout).toContain('All 2 ports available');
+  });
 });

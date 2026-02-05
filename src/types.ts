@@ -97,3 +97,7 @@ export interface CliOptions {
   dryRun: boolean;
   verbose: boolean;
 }
+
+export interface OutputContext {
+  mode: 'single' | 'multi' | 'auto-detect';
+}

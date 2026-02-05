@@ -3,7 +3,8 @@
  */
 
 import chalk from 'chalk';
-import type { PortStatus, Blocker, ScanResult, PortSource } from './types.js';
+import type { PortStatus, Blocker, ScanResult, PortSource, OutputContext } from './types.js';
+import type { KillPortResult } from './index.js';
 
 /**
  * Display the port-guardian header
@@ -188,4 +189,73 @@ export function printSummary(result: ScanResult): void {
     `  ${chalk.white('Summary:')} ${chalk.green(`${available} available`)}, ${blocked > 0 ? chalk.red(`${blocked} blocked`) : chalk.gray('0 blocked')}`
   );
   console.log();
+}
+
+/**
+ * Compact single-line output for single-port checks
+ */
+export function printCompactResult(status: PortStatus): void {
+  if (status.available) {
+    console.log(`  ${chalk.green('✓')} Port ${status.port} available`);
+  } else {
+    const blocker = status.blocker;
+    const desc = blocker
+      ? `${blocker.processName} (PID ${blocker.pid})`
+      : 'unknown process';
+    const typeLabel = blocker ? getBlockerTypeLabel(blocker) : '';
+    console.log(`  ${chalk.red('✗')} Port ${status.port} blocked by ${desc} ${typeLabel}`.trimEnd());
+
+    if (blocker?.docker) {
+      console.log(`     ${chalk.gray('└─')} ${chalk.gray('Container:')} ${chalk.cyan(blocker.docker.containerName)}`);
+      if (blocker.docker.composeProject) {
+        console.log(`     ${chalk.gray('   └─')} ${chalk.gray('Project:')} ${chalk.cyan(blocker.docker.composeProject)}`);
+      }
+    }
+
+    for (const warning of status.warnings) {
+      console.log(`     ${chalk.yellow('⚠')} ${chalk.yellow(warning)}`);
+    }
+  }
+}
+
+/**
+ * Formatted kill result output
+ */
+export function printKillResult(r: KillPortResult, dryRun: boolean): void {
+  if (r.wasAvailable) {
+    console.log(`  ${chalk.green('✓')} Port ${r.port} already available`);
+  } else if (r.killed) {
+    const action = dryRun ? 'would kill' : 'killed';
+    const proc = r.blocker?.process ?? 'unknown';
+    const pid = r.blocker?.pid ?? '?';
+    const suffix = dryRun ? ' (dry-run)' : '';
+    console.log(`  ${chalk.green('✓')} Port ${r.port}: ${action} ${proc} (PID ${pid})${suffix}`);
+  } else {
+    console.log(`  ${chalk.red('✗')} Port ${r.port}: failed - ${r.error}`);
+  }
+}
+
+/**
+ * Smart scan output renderer that adapts to context
+ */
+export function printScanOutput(result: ScanResult, context: OutputContext): void {
+  if (context.mode === 'single' && result.ports.length > 0) {
+    printCompactResult(result.ports[0]);
+  } else if (context.mode === 'multi') {
+    printScanResults(result);
+    if (!result.hasConflicts) {
+      console.log(`  ${chalk.green('✓')} All ${result.ports.length} ports available`);
+    } else {
+      printSummary(result);
+    }
+  } else {
+    // auto-detect
+    printScanResults(result);
+    if (!result.hasConflicts) {
+      printSummary(result);
+      console.log(`  ${chalk.green('✓')} All ports are available!`);
+    } else {
+      printSummary(result);
+    }
+  }
 }
