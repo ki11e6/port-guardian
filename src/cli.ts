@@ -4,6 +4,7 @@
 
 import { parseArgs } from 'node:util';
 import { readFileSync } from 'node:fs';
+import { writeFile, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import inquirer from 'inquirer';
@@ -15,12 +16,10 @@ const packageJson = JSON.parse(
   readFileSync(join(__dirname, '..', 'package.json'), 'utf-8')
 );
 const VERSION = packageJson.version;
-import ora from 'ora';
 import { detectPorts } from './detector.js';
-import { checkPorts, findAvailablePort } from './scanner.js';
-import { resolveBlocker, generateWarnings } from './resolver.js';
+import { findAvailablePort } from './scanner.js';
 import { killBlocker } from './killer.js';
-import { killPort } from './index.js';
+import { scan, killPort } from './index.js';
 import {
   printHeader,
   printDetectedPorts,
@@ -31,7 +30,7 @@ import {
   printInfo,
   printSummary,
 } from './ui.js';
-import type { PortStatus, ScanResult, CliOptions, Blocker } from './types.js';
+import type { PortStatus, CliOptions, Blocker, PortSource } from './types.js';
 
 /**
  * Parse and validate port strings, returning valid port numbers or exiting on error
@@ -77,6 +76,12 @@ export async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // Handle init command
+  if (positionals[0] === 'init') {
+    await initCommand(values.force ?? false, values.ci ?? false);
+    process.exit(0);
+  }
+
   // Check for conflicting flags
   if (values.find && values.kill) {
     printError('Cannot use --find and --kill together.');
@@ -111,8 +116,9 @@ export async function main(): Promise<void> {
     const parsedPorts = parseAndValidatePorts(positionals);
 
     const dryRun = values['dry-run'] ?? false;
+    const force = values.force ?? false;
     const results = await Promise.all(
-      parsedPorts.map((port) => killPort(port, { dryRun }))
+      parsedPorts.map((port) => killPort(port, { dryRun, force }))
     );
     const hasErrors = results.some((r) => !r.killed && !r.wasAvailable);
 
@@ -152,15 +158,7 @@ export async function main(): Promise<void> {
     printInfo(`Checking ${ports.length} port(s) from command line`);
   } else {
     // Auto-detect from project files
-    let sources;
-    if (options.verbose) {
-      // Skip spinner when verbose - verbose output is the progress indicator
-      sources = await detectPorts({ verbose: true });
-    } else {
-      const spinner = ora('Detecting ports from project files...').start();
-      sources = await detectPorts();
-      spinner.stop();
-    }
+    const sources = await detectPorts(options.verbose ? { verbose: true } : undefined);
 
     printDetectedPorts(sources);
     ports = sources.map((s) => s.port);
@@ -175,47 +173,7 @@ export async function main(): Promise<void> {
   }
 
   // Scan ports
-  const spinner = ora('Scanning ports...').start();
-  const scanResults = await checkPorts(ports);
-  spinner.stop();
-
-  // Build port status with resolution
-  const portStatuses: PortStatus[] = [];
-
-  for (const port of ports) {
-    const result = scanResults.get(port);
-
-    if (!result || result.available) {
-      portStatuses.push({
-        port,
-        available: true,
-        warnings: [],
-      });
-    } else if (result.process) {
-      const blocker = await resolveBlocker(result.process, port);
-      const warnings = generateWarnings(blocker);
-
-      portStatuses.push({
-        port,
-        available: false,
-        blocker,
-        warnings,
-      });
-    } else {
-      // Port is blocked but we couldn't identify the process
-      portStatuses.push({
-        port,
-        available: false,
-        warnings: ['Unable to identify blocking process. Try running with sudo.'],
-      });
-    }
-  }
-
-  const scanResult: ScanResult = {
-    ports: portStatuses,
-    hasConflicts: portStatuses.some((p) => !p.available),
-    conflictCount: portStatuses.filter((p) => !p.available).length,
-  };
+  const scanResult = await scan({ ports });
 
   printScanResults(scanResult);
   printSummary(scanResult);
@@ -234,10 +192,10 @@ export async function main(): Promise<void> {
 
   if (options.force) {
     // Force kill all blockers
-    await forceKillAll(portStatuses, options);
+    await forceKillAll(scanResult.ports, options);
   } else {
     // Interactive resolution
-    await interactiveResolve(portStatuses, options);
+    await interactiveResolve(scanResult.ports, options);
   }
 }
 
@@ -251,7 +209,7 @@ async function forceKillAll(
   const blockedPorts = portStatuses.filter((p) => !p.available && p.blocker);
 
   for (const port of blockedPorts) {
-    const result = await killBlocker(port.blocker!, { dryRun: options.dryRun });
+    const result = await killBlocker(port.blocker!, { dryRun: options.dryRun, force: true });
 
     if (result.success) {
       printSuccess(`Port ${port.port}: ${result.command}`);
@@ -275,7 +233,7 @@ async function interactiveResolve(
 
     // Show restart warning if applicable
     if (blocker.docker?.restartPolicy === 'always') {
-      printRestartWarning(blocker.docker.containerName);
+      printRestartWarning();
     }
 
     const choices = buildActionChoices(blocker);
@@ -356,11 +314,92 @@ function buildActionChoices(blocker: Blocker): Choice[] {
 }
 
 /**
+ * Init command - generate .portguardian.yml from detected ports
+ */
+async function initCommand(force: boolean, ci: boolean): Promise<void> {
+  const configPath = join(process.cwd(), '.portguardian.yml');
+
+  // Check if config already exists
+  const configExists = await stat(configPath).then(() => true, () => false);
+  if (configExists) {
+    if (!force && !ci) {
+      const { overwrite } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'overwrite',
+        message: '.portguardian.yml already exists. Overwrite?',
+        default: false,
+      }]);
+      if (!overwrite) {
+        printInfo('Aborted');
+        return;
+      }
+    }
+  }
+
+  // Detect ports (exclude .portguardian.yml to avoid circular detection)
+  const sources = await detectPorts({ exclude: ['.portguardian.yml'] });
+
+  if (sources.length === 0) {
+    printInfo('No ports detected from project files.');
+    printInfo('Creating empty config. Add ports manually.');
+    const yaml = '# Port Guardian Configuration\n# See: https://github.com/ki11e6/port-guardian\nports: []\n';
+    await writeFile(configPath, yaml);
+    printSuccess('Created .portguardian.yml');
+    return;
+  }
+
+  // Show detected ports
+  printDetectedPorts(sources);
+
+  // Confirm before writing
+  if (!force && !ci) {
+    const { confirm } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'confirm',
+      message: `Write ${sources.length} port(s) to .portguardian.yml?`,
+      default: true,
+    }]);
+    if (!confirm) {
+      printInfo('Aborted');
+      return;
+    }
+  }
+
+  const yamlContent = generatePortGuardianYaml(sources);
+  await writeFile(configPath, yamlContent);
+  printSuccess(`Created .portguardian.yml with ${sources.length} port(s)`);
+}
+
+/**
+ * Generate .portguardian.yml content from detected ports
+ */
+export function generatePortGuardianYaml(sources: PortSource[]): string {
+  let yaml = '# Port Guardian Configuration\n';
+  yaml += '# Generated by: port-guardian init\n';
+  yaml += '# See: https://github.com/ki11e6/port-guardian\n\n';
+  yaml += 'ports:\n';
+
+  for (const source of sources) {
+    yaml += `  - port: ${source.port}\n`;
+    if (source.name) {
+      // Quote names with YAML-special characters
+      const needsQuoting = /[:#\[\]{}&*?|>!%@`"']/.test(source.name) || source.name.trim() !== source.name;
+      yaml += `    name: ${needsQuoting ? `"${source.name.replace(/"/g, '\\"')}"` : source.name}\n`;
+    }
+  }
+
+  return yaml;
+}
+
+/**
  * Print help message
  */
 function printHelp(): void {
   console.log(`
-  Usage: port-guardian [ports...] [options]
+  Usage: port-guardian [command] [ports...] [options]
+
+  Commands:
+    init            Generate .portguardian.yml from detected ports
 
   Options:
     -f, --force     Kill all blockers without prompting
@@ -384,6 +423,8 @@ function printHelp(): void {
     port-guardian --find 3000      # Find available port from 3000
     port-guardian --find           # Find random available port
     port-guardian --find --json    # Output as JSON: {"port": 3001}
+    port-guardian init             # Generate config from detected ports
+    port-guardian init --force     # Overwrite existing config
 
   Port Detection Sources (auto-detect order):
     .portguardian.yml       100%  - Explicit port configuration
@@ -391,13 +432,24 @@ function printHelp(): void {
     docker-compose*.yml      95%  - All compose files (glob)
     Nx/Angular project.json  90%  - Serve target ports
     Framework configs        85%  - vite, webpack, next, nuxt
+    Server entry point       80%  - src/main.ts, src/server.ts listen() calls
     .env files             70-85% - PORT=, *_PORT=, localhost URLs
+    package.json scripts     70%  - --port flags in npm scripts
     Dockerfile               70%  - EXPOSE and ENV PORT directives
+    Framework defaults       50%  - Inferred defaults (Vite=5173, etc.)
 `);
 }
 
-// Run if called directly
-main().catch((error) => {
-  console.error('Error:', error.message);
-  process.exit(1);
-});
+// Run when invoked directly or via bin wrapper (not when imported for testing)
+const entry = fileURLToPath(import.meta.url);
+const isCli = process.argv[1] && (
+  process.argv[1] === entry ||
+  process.argv[1].endsWith('/port-guardian.js') ||
+  process.argv[1].endsWith('/port-guardian')
+);
+if (isCli) {
+  main().catch((error) => {
+    console.error('Error:', error.message);
+    process.exit(1);
+  });
+}

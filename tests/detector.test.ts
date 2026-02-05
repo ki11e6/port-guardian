@@ -845,6 +845,409 @@ export default defineConfig({
     });
   });
 
+  describe('detectFromNestEntry', () => {
+    it('should detect direct port from app.listen(3000)', async () => {
+      await mkdir(join(testDir, 'src'), { recursive: true });
+      await writeFile(join(testDir, 'src', 'main.ts'), `
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  await app.listen(3000);
+}
+bootstrap();
+`);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0]).toMatchObject({
+        port: 3000,
+        name: 'Server',
+        source: 'src/main.ts',
+        confidence: 80,
+      });
+    });
+
+    it('should detect fallback port from process.env.PORT || 3000', async () => {
+      await mkdir(join(testDir, 'src'), { recursive: true });
+      await writeFile(join(testDir, 'src', 'main.ts'), `
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  await app.listen(process.env.PORT || 3000);
+}
+bootstrap();
+`);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0].port).toBe(3000);
+    });
+
+    it('should detect fallback port with nullish coalescing', async () => {
+      await mkdir(join(testDir, 'src'), { recursive: true });
+      await writeFile(join(testDir, 'src', 'main.ts'), `
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  await app.listen(process.env.PORT ?? 4000);
+}
+`);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0].port).toBe(4000);
+    });
+
+    it('should detect from src/main.js', async () => {
+      await mkdir(join(testDir, 'src'), { recursive: true });
+      await writeFile(join(testDir, 'src', 'main.js'), `
+const express = require('express');
+const app = express();
+app.listen(8080);
+`);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0]).toMatchObject({
+        port: 8080,
+        source: 'src/main.js',
+        confidence: 80,
+      });
+    });
+
+    it('should detect port from parseInt fallback', async () => {
+      await mkdir(join(testDir, 'src'), { recursive: true });
+      await writeFile(join(testDir, 'src', 'main.ts'), `
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  await app.listen(parseInt(process.env.PORT, 10) || 3000);
+}
+`);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0].port).toBe(3000);
+    });
+
+    it('should detect from src/server.ts', async () => {
+      await mkdir(join(testDir, 'src'), { recursive: true });
+      await writeFile(join(testDir, 'src', 'server.ts'), `
+import express from 'express';
+const app = express();
+app.listen(4000);
+`);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0]).toMatchObject({
+        port: 4000,
+        name: 'Server',
+        source: 'src/server.ts',
+        confidence: 80,
+      });
+    });
+
+    it('should skip listen() calls in comments', async () => {
+      await mkdir(join(testDir, 'src'), { recursive: true });
+      await writeFile(join(testDir, 'src', 'main.ts'), `
+// app.listen(9999);
+/* app.listen(8888); */
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  await app.listen(3000);
+}
+`);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0].port).toBe(3000);
+    });
+
+    it('should not detect when no listen call exists', async () => {
+      await mkdir(join(testDir, 'src'), { recursive: true });
+      await writeFile(join(testDir, 'src', 'main.ts'), `
+export function main() {
+  console.log('Hello');
+}
+`);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(0);
+    });
+  });
+
+  describe('detectFromPackageJsonScripts', () => {
+    it('should detect --port flag from scripts', async () => {
+      const pkg = {
+        name: 'test',
+        scripts: {
+          dev: 'vite --port 3000',
+        },
+      };
+      await writeFile(join(testDir, 'package.json'), JSON.stringify(pkg));
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0]).toMatchObject({
+        port: 3000,
+        name: 'dev',
+        source: 'package.json scripts',
+        confidence: 70,
+      });
+    });
+
+    it('should detect --port= syntax', async () => {
+      const pkg = {
+        name: 'test',
+        scripts: {
+          start: 'ng serve --port=4200',
+        },
+      };
+      await writeFile(join(testDir, 'package.json'), JSON.stringify(pkg));
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0].port).toBe(4200);
+    });
+
+    it('should detect -p shorthand', async () => {
+      const pkg = {
+        name: 'test',
+        scripts: {
+          dev: 'next dev -p 3001',
+        },
+      };
+      await writeFile(join(testDir, 'package.json'), JSON.stringify(pkg));
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0].port).toBe(3001);
+    });
+
+    it('should detect ports from multiple scripts', async () => {
+      const pkg = {
+        name: 'test',
+        scripts: {
+          dev: 'vite --port 3000',
+          storybook: 'storybook dev -p 6006',
+        },
+      };
+      await writeFile(join(testDir, 'package.json'), JSON.stringify(pkg));
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(2);
+      expect(ports.map((p) => p.port).sort()).toEqual([3000, 6006]);
+    });
+
+    it('should not match docker -p port mappings', async () => {
+      const pkg = {
+        name: 'test',
+        scripts: {
+          docker: 'docker run -p 3000:80 my-image',
+        },
+      };
+      await writeFile(join(testDir, 'package.json'), JSON.stringify(pkg));
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(0);
+    });
+
+    it('should ignore scripts without port flags', async () => {
+      const pkg = {
+        name: 'test',
+        scripts: {
+          build: 'tsc',
+          lint: 'eslint src/',
+        },
+      };
+      await writeFile(join(testDir, 'package.json'), JSON.stringify(pkg));
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(0);
+    });
+  });
+
+  describe('detectFromFrameworkDefaults', () => {
+    it('should detect Vite default (5173) when config has no port', async () => {
+      const config = `
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  plugins: [],
+});
+`;
+      await writeFile(join(testDir, 'vite.config.ts'), config);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0]).toMatchObject({
+        port: 5173,
+        name: 'Vite (default)',
+        source: 'vite.config.ts',
+        confidence: 50,
+      });
+    });
+
+    it('should NOT emit default when config has explicit port', async () => {
+      const config = `
+export default defineConfig({
+  server: {
+    port: 3000,
+  },
+});
+`;
+      await writeFile(join(testDir, 'vite.config.ts'), config);
+
+      const ports = await detectPorts(testDir);
+
+      // Should get 3000 from framework configs (85%), NOT 5173 from defaults
+      expect(ports).toHaveLength(1);
+      expect(ports[0].port).toBe(3000);
+      expect(ports[0].confidence).toBe(85);
+    });
+
+    it('should NOT emit default when config uses process.env.PORT', async () => {
+      const config = `
+export default defineConfig({
+  server: {
+    port: process.env.PORT || 5173,
+  },
+});
+`;
+      await writeFile(join(testDir, 'vite.config.ts'), config);
+
+      const ports = await detectPorts(testDir);
+
+      // Should get 5173 from framework configs (85%), NOT from defaults (50%)
+      expect(ports).toHaveLength(1);
+      expect(ports[0].confidence).toBe(85);
+    });
+
+    it('should detect Next.js default (3000) when config has no port', async () => {
+      const config = `
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+};
+export default nextConfig;
+`;
+      await writeFile(join(testDir, 'next.config.mjs'), config);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0]).toMatchObject({
+        port: 3000,
+        name: 'Next.js (default)',
+        source: 'next.config.mjs',
+        confidence: 50,
+      });
+    });
+
+    it('should detect Webpack default (8080) when config has no port', async () => {
+      const config = `
+module.exports = {
+  entry: './src/index.js',
+};
+`;
+      await writeFile(join(testDir, 'webpack.config.js'), config);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0]).toMatchObject({
+        port: 8080,
+        name: 'Webpack (default)',
+        source: 'webpack.config.js',
+        confidence: 50,
+      });
+    });
+
+    it('should detect Angular default (4200) when angular.json has no serve port', async () => {
+      const angularConfig = {
+        projects: {
+          'my-app': {
+            architect: {
+              build: {
+                builder: '@angular-devkit/build-angular:browser',
+              },
+              serve: {
+                builder: '@angular-devkit/build-angular:dev-server',
+              },
+            },
+          },
+        },
+      };
+      await writeFile(join(testDir, 'angular.json'), JSON.stringify(angularConfig));
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0]).toMatchObject({
+        port: 4200,
+        name: 'Angular (default)',
+        source: 'angular.json',
+        confidence: 50,
+      });
+    });
+
+    it('should NOT emit Angular default when angular.json has serve port', async () => {
+      const angularConfig = {
+        projects: {
+          'my-app': {
+            architect: {
+              serve: {
+                options: { port: 4300 },
+              },
+            },
+          },
+        },
+      };
+      await writeFile(join(testDir, 'angular.json'), JSON.stringify(angularConfig));
+
+      const ports = await detectPorts(testDir);
+
+      // Should get 4300 from Nx/Angular detector (90%), NOT 4200 default
+      expect(ports).toHaveLength(1);
+      expect(ports[0].port).toBe(4300);
+      expect(ports[0].confidence).toBe(90);
+    });
+
+    it('should detect Nuxt default (3000) when config has no port', async () => {
+      const config = `
+export default defineNuxtConfig({
+  modules: [],
+});
+`;
+      await writeFile(join(testDir, 'nuxt.config.ts'), config);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0]).toMatchObject({
+        port: 3000,
+        name: 'Nuxt (default)',
+        source: 'nuxt.config.ts',
+        confidence: 50,
+      });
+    });
+  });
+
   describe('priority and deduplication', () => {
     it('should prioritize .portguardian.yml over docker-compose.yml', async () => {
       const guardianConfig = `

@@ -142,7 +142,7 @@ function formatRestartPolicy(policy: string): string {
 /**
  * Display warning box for restart:always
  */
-export function printRestartWarning(_containerName: string): void {
+export function printRestartWarning(): void {
   console.log();
   console.log(chalk.yellow('  ┌' + '─'.repeat(60) + '┐'));
   console.log(chalk.yellow('  │') + chalk.yellow.bold(' ⚠  WARNING: Container has restart:always policy') + ' '.repeat(11) + chalk.yellow('│'));

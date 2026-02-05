@@ -48,13 +48,6 @@ export async function killBlocker(
         await stopAndRemoveContainer(blocker.docker!.containerName);
         break;
 
-      case 'systemctl-stop':
-        if (!blocker.commandLine) {
-          throw new Error('No systemd unit specified');
-        }
-        await stopSystemdService(blocker.commandLine);
-        break;
-
       default:
         throw new Error(`Unknown action: ${blocker.suggestedAction}`);
     }
@@ -131,17 +124,6 @@ async function stopAndRemoveContainer(containerName: string): Promise<void> {
   const safeName = sanitizeContainerName(containerName);
   await execAsync(`docker stop ${safeName}`);
   await execAsync(`docker rm ${safeName}`);
-}
-
-/**
- * Stop a systemd service
- */
-async function stopSystemdService(unitName: string): Promise<void> {
-  // Validate unit name (alphanumeric, dots, dashes, @)
-  if (!/^[a-zA-Z0-9@._-]+$/.test(unitName)) {
-    throw new Error(`Invalid systemd unit name: ${unitName}`);
-  }
-  await execAsync(`sudo systemctl stop ${unitName}`);
 }
 
 /**

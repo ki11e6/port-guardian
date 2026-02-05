@@ -32,6 +32,9 @@ export async function detectPorts(optionsOrCwd?: string | DetectOptions): Promis
     { name: 'Nx/Angular project.json', fn: detectFromNxProjects },
     { name: 'framework configs', fn: detectFromFrameworkConfigs },
     { name: 'Dockerfile', fn: detectFromDockerfile },
+    { name: 'server entry point', fn: detectFromNestEntry },
+    { name: 'package.json scripts', fn: detectFromPackageJsonScripts },
+    { name: 'framework defaults', fn: detectFromFrameworkDefaults },
   ];
 
   for (const detector of detectors) {
@@ -418,6 +421,154 @@ async function detectFromDockerfile(cwd: string): Promise<PortSource[]> {
           ports.push({ port, name: envMatch[1], source: fileName, confidence: 70 });
         }
       }
+    }
+  }
+
+  return ports;
+}
+
+/**
+ * Detect from server entry points (NestJS, Express, Fastify, etc.)
+ */
+async function detectFromNestEntry(cwd: string): Promise<PortSource[]> {
+  const files = [
+    'src/main.ts', 'src/main.js',
+    'src/server.ts', 'src/server.js',
+  ];
+  const ports: PortSource[] = [];
+
+  for (const fileName of files) {
+    const filePath = join(cwd, fileName);
+    if (!(await fileExists(filePath))) continue;
+
+    const content = await readFile(filePath, 'utf-8');
+    const lines = content.split('\n');
+
+    // Pattern 1: .listen(3000) - direct numeric port (skip comment lines)
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue;
+
+      const directMatch = trimmed.match(/\.listen\(\s*(\d+)/);
+      if (directMatch) {
+        const port = parseInt(directMatch[1], 10);
+        if (isValidPort(port)) {
+          ports.push({ port, name: 'Server', source: fileName, confidence: 80 });
+          break;
+        }
+      }
+    }
+
+    // Pattern 2: line with .listen( containing || or ?? fallback (handles nested parens like parseInt())
+    if (ports.length === 0) {
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue;
+
+        if (/\.listen\(/.test(trimmed)) {
+          const fallback = trimmed.match(/(?:\|\||[\?]{2})\s*(\d+)/);
+          if (fallback) {
+            const port = parseInt(fallback[1], 10);
+            if (isValidPort(port)) {
+              ports.push({ port, name: 'Server', source: fileName, confidence: 80 });
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    // Found an entry file, skip remaining
+    break;
+  }
+
+  return ports;
+}
+
+/**
+ * Detect from package.json scripts (--port flags)
+ */
+async function detectFromPackageJsonScripts(cwd: string): Promise<PortSource[]> {
+  const filePath = join(cwd, 'package.json');
+  if (!(await fileExists(filePath))) return [];
+
+  const content = await readFile(filePath, 'utf-8');
+  const pkg = JSON.parse(content);
+
+  if (!pkg?.scripts || typeof pkg.scripts !== 'object') return [];
+
+  const ports: PortSource[] = [];
+
+  for (const [scriptName, scriptValue] of Object.entries(pkg.scripts)) {
+    if (typeof scriptValue !== 'string') continue;
+
+    // Match --port 3000, --port=3000, -p 3000, -p=3000
+    // Negative lookahead (?![\d:]*:\d) avoids docker's -p 3000:80
+    const matches = scriptValue.matchAll(/(?:--port|-p)[= ](\d+)\b(?!:)/g);
+    for (const match of matches) {
+      const port = parseInt(match[1], 10);
+      if (isValidPort(port) && !ports.some((p) => p.port === port)) {
+        ports.push({ port, name: scriptName, source: 'package.json scripts', confidence: 70 });
+      }
+    }
+  }
+
+  return ports;
+}
+
+/**
+ * Detect framework default ports when config exists but no port is configured
+ */
+async function detectFromFrameworkDefaults(cwd: string): Promise<PortSource[]> {
+  const ports: PortSource[] = [];
+
+  const configs: Array<{ files: string[]; name: string; defaultPort: number }> = [
+    { files: ['vite.config.ts', 'vite.config.js', 'vite.config.mjs'], name: 'Vite', defaultPort: 5173 },
+    { files: ['next.config.js', 'next.config.mjs', 'next.config.ts'], name: 'Next.js', defaultPort: 3000 },
+    { files: ['nuxt.config.js', 'nuxt.config.ts'], name: 'Nuxt', defaultPort: 3000 },
+    { files: ['webpack.config.js', 'webpack.config.ts'], name: 'Webpack', defaultPort: 8080 },
+  ];
+
+  const portPattern = /\bport\s*[:=]\s*\d+|process\.env\.\w*PORT/;
+
+  for (const config of configs) {
+    for (const fileName of config.files) {
+      const filePath = join(cwd, fileName);
+      if (!(await fileExists(filePath))) continue;
+
+      const content = await readFile(filePath, 'utf-8');
+
+      // Only add default if no explicit port is configured
+      if (!portPattern.test(content)) {
+        ports.push({ port: config.defaultPort, name: `${config.name} (default)`, source: fileName, confidence: 50 });
+      }
+
+      break; // Found config for this framework
+    }
+  }
+
+  // Angular: check angular.json for projects without serve port
+  const angularPath = join(cwd, 'angular.json');
+  if (await fileExists(angularPath)) {
+    try {
+      const content = await readFile(angularPath, 'utf-8');
+      const config = JSON.parse(content);
+
+      if (config.projects && typeof config.projects === 'object') {
+        let hasAnyPort = false;
+        for (const project of Object.values(config.projects)) {
+          if ((project as { architect?: { serve?: { options?: { port?: number } } } })
+            ?.architect?.serve?.options?.port) {
+            hasAnyPort = true;
+            break;
+          }
+        }
+        if (!hasAnyPort) {
+          ports.push({ port: 4200, name: 'Angular (default)', source: 'angular.json', confidence: 50 });
+        }
+      }
+    } catch {
+      // Parse error
     }
   }
 

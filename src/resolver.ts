@@ -88,35 +88,6 @@ async function getContainerInspect(
 }
 
 /**
- * Check if process is kubectl port-forward
- */
-async function isKubectlPortForward(pid: number): Promise<boolean> {
-  try {
-    const { stdout } = await execAsync(`ps -p ${pid} -o args= 2>/dev/null`);
-    const cmdLine = stdout.trim();
-    return cmdLine.includes('kubectl') && cmdLine.includes('port-forward');
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Check if a process is managed by systemd
- */
-async function getSystemdUnit(pid: number): Promise<string | null> {
-  try {
-    const { stdout } = await execAsync(
-      `systemctl status ${pid} 2>/dev/null | head -1`
-    );
-    // Extract unit name from "● unit.service - Description"
-    const match = stdout.match(/●\s+(\S+\.service)/);
-    return match ? match[1] : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Resolve a process to a full blocker description
  */
 export async function resolveBlocker(
@@ -127,44 +98,6 @@ export async function resolveBlocker(
 
   if (isDockerProxy && (await isDockerAvailable())) {
     return resolveDockerBlocker(process, port);
-  }
-
-  // Check for kubectl port-forward
-  if (process.command === 'kubectl' || (await isKubectlPortForward(process.pid))) {
-    return {
-      type: 'kubectl',
-      pid: process.pid,
-      processName: process.command,
-      commandLine: process.args,
-      isOrphanedDockerProxy: false,
-      hasRestartLoop: false,
-      suggestedAction: 'kill-process',
-      suggestedCommand: `kill ${process.pid}`,
-      requiresSudo: process.user === 'root',
-      safeToAutoKill: true, // kubectl port-forward is generally safe to kill
-      isPermanentFix: true,
-    };
-  }
-
-  // Check for systemd-managed service (Linux only)
-  const platform = globalThis.process?.platform || 'linux';
-  if (platform !== 'darwin') {
-    const systemdUnit = await getSystemdUnit(process.pid);
-    if (systemdUnit) {
-      return {
-        type: 'systemd',
-        pid: process.pid,
-        processName: process.command,
-        commandLine: systemdUnit,
-        isOrphanedDockerProxy: false,
-        hasRestartLoop: false,
-        suggestedAction: 'systemctl-stop',
-        suggestedCommand: `sudo systemctl stop ${systemdUnit}`,
-        requiresSudo: true,
-        safeToAutoKill: false,
-        isPermanentFix: false, // Service may restart
-      };
-    }
   }
 
   // Native process blocker

@@ -190,7 +190,7 @@ describe('ui', () => {
     it('should print warning box', async () => {
       const { printRestartWarning } = await import('../src/ui.js');
 
-      printRestartWarning('test-container');
+      printRestartWarning();
 
       const output = consoleOutput.join('\n');
       expect(output).toContain('WARNING');

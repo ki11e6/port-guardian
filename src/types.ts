@@ -5,9 +5,7 @@
 export type BlockerType =
   | 'native'
   | 'docker-container'
-  | 'orphaned-docker-proxy'
-  | 'kubectl'
-  | 'systemd';
+  | 'orphaned-docker-proxy';
 
 export type RestartPolicy = 'no' | 'always' | 'unless-stopped' | 'on-failure';
 
@@ -16,8 +14,7 @@ export type ContainerState = 'running' | 'exited' | 'dead' | 'paused' | 'created
 export type ResolutionAction =
   | 'kill-process'
   | 'stop-container'
-  | 'stop-and-remove'
-  | 'systemctl-stop';
+  | 'stop-and-remove';
 
 export interface PortSource {
   port: number;
