@@ -68,10 +68,6 @@ jobs:
 
   docker-test:
     runs-on: ubuntu-latest
-    services:
-      docker:
-        image: docker:dind
-        options: --privileged
 
     steps:
       - name: Checkout code
@@ -91,5 +87,3 @@ jobs:
 
       - name: Run Docker integration tests
         run: npm run test:run -- --reporter=verbose
-        env:
-          DOCKER_HOST: unix:///var/run/docker.sock

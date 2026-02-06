@@ -15,7 +15,7 @@ describe('scanner', () => {
       expect(result.process).toBeUndefined();
     });
 
-    it('should detect a port in use by a native process', async () => {
+    it('should detect a port in use by a native process', async (ctx) => {
       // Find a port that's actually in use on the system
       const { stdout } = await execAsync(
         "lsof -i -P -n | grep LISTEN | head -1 | awk '{print $9}' | cut -d: -f2"
@@ -23,8 +23,7 @@ describe('scanner', () => {
       const port = parseInt(stdout.trim(), 10);
 
       if (isNaN(port)) {
-        // No ports in use, skip this test
-        console.log('Skipping test: no ports in use');
+        ctx.skip();
         return;
       }
 
@@ -155,9 +154,9 @@ describe('scanner - Docker detection', () => {
     }
   }, 20000);
 
-  it('should detect Docker container blocking port', async () => {
+  it('should detect Docker container blocking port', async (ctx) => {
     if (!dockerAvailable || !testContainerId) {
-      console.log('Skipping Docker test: Docker not available or container not started');
+      ctx.skip();
       return;
     }
 

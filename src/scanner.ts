@@ -8,15 +8,40 @@ import type { ProcessInfo } from './types.js';
 
 const execAsync = promisify(exec);
 
+// Cache docker availability for the lifetime of the process
+let dockerAvailableCache: boolean | null = null;
+
+async function isDockerReachable(): Promise<boolean> {
+  if (dockerAvailableCache !== null) return dockerAvailableCache;
+  try {
+    await execAsync('docker info >/dev/null 2>&1', { timeout: 5000 });
+    dockerAvailableCache = true;
+  } catch {
+    dockerAvailableCache = false;
+  }
+  return dockerAvailableCache;
+}
+
 export interface LsofResult {
   available: boolean;
   process?: ProcessInfo;
 }
 
 /**
+ * Validate port is an integer in the valid range
+ */
+function validatePort(port: number): void {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid port: ${port}. Must be an integer between 1 and 65535.`);
+  }
+}
+
+/**
  * Check if a port is available using multiple detection methods
  */
 export async function checkPort(port: number): Promise<LsofResult> {
+  validatePort(port);
+
   // Try lsof first (works for user-owned processes)
   const lsofResult = await checkPortWithLsof(port);
   if (!lsofResult.available) {
@@ -55,13 +80,18 @@ async function checkPortWithLsof(port: number): Promise<LsofResult> {
     }
 
     // Parse lsof output: COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
+    // Fields are whitespace-separated but NAME (field 9+) can contain spaces
     const parts = line.split(/\s+/);
     if (parts.length < 3) {
       return { available: true };
     }
 
-    const [command, pidStr, user] = parts;
-    const pid = parseInt(pidStr, 10);
+    const command = parts[0];
+    const pid = parseInt(parts[1], 10);
+    const user = parts[2];
+
+    // NAME field (index 8+) may contain spaces - rejoin everything from index 8
+    const args = parts.length > 8 ? parts.slice(8).join(' ') : undefined;
 
     return {
       available: false,
@@ -69,7 +99,7 @@ async function checkPortWithLsof(port: number): Promise<LsofResult> {
         pid,
         command,
         user,
-        args: parts.slice(8).join(' '),
+        args,
       },
     };
   } catch {
@@ -126,12 +156,13 @@ async function checkPortWithSs(port: number): Promise<LsofResult> {
  */
 async function checkPortWithDocker(port: number): Promise<LsofResult | null> {
   try {
-    // Check if docker is available
-    await execAsync('docker info >/dev/null 2>&1');
+    // Check if docker is available (cached)
+    if (!(await isDockerReachable())) return null;
 
     // Find container by published port
     const { stdout } = await execAsync(
-      `docker ps --filter "publish=${port}" --format "{{.ID}}|{{.Names}}" 2>/dev/null`
+      `docker ps --filter "publish=${port}" --format "{{.ID}}|{{.Names}}" 2>/dev/null`,
+      { timeout: 5000 }
     );
 
     const line = stdout.trim();
@@ -177,7 +208,8 @@ async function checkPortWithDocker(port: number): Promise<LsofResult | null> {
 async function findDockerProxyPid(port: number): Promise<number | null> {
   try {
     const { stdout } = await execAsync(
-      `pgrep -f "docker-proxy.*-host-port ${port}" 2>/dev/null`
+      `pgrep -f "docker-proxy.*-host-port ${port}" 2>/dev/null`,
+      { timeout: 5000 }
     );
     const pid = parseInt(stdout.trim(), 10);
     return isNaN(pid) ? null : pid;
@@ -200,8 +232,8 @@ export async function findAvailablePort(
   basePort?: number,
   maxAttempts = 100
 ): Promise<number> {
-  if (basePort !== undefined && (!Number.isInteger(basePort) || basePort < 1 || basePort > 65535)) {
-    throw new Error(`Invalid port: ${basePort}. Must be an integer between 1 and 65535.`);
+  if (basePort !== undefined) {
+    validatePort(basePort);
   }
 
   const start =
@@ -228,6 +260,10 @@ export async function findAvailablePort(
 export async function checkPorts(
   ports: number[]
 ): Promise<Map<number, LsofResult>> {
+  for (const port of ports) {
+    validatePort(port);
+  }
+
   const results = await Promise.all(
     ports.map(async (port) => ({
       port,

@@ -362,9 +362,9 @@ describe('killer - Docker integration', () => {
       }
     });
 
-    it('should stop a Docker container', async () => {
+    it('should stop a Docker container', async (ctx) => {
       if (!dockerAvailable || !testContainerId) {
-        console.log('Skipping Docker test');
+        ctx.skip();
         return;
       }
 
@@ -427,9 +427,9 @@ describe('killer - Docker integration', () => {
       }
     });
 
-    it('should stop and remove a Docker container', async () => {
+    it('should stop and remove a Docker container', async (ctx) => {
       if (!dockerAvailable) {
-        console.log('Skipping Docker test');
+        ctx.skip();
         return;
       }
 

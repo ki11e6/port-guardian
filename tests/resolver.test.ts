@@ -223,9 +223,9 @@ describe('resolver - Docker integration', () => {
   }, 20000);
 
   describe('findContainerByPort', () => {
-    it('should find container by port', async () => {
+    it('should find container by port', async (ctx) => {
       if (!dockerAvailable || !testContainerId) {
-        console.log('Skipping Docker test');
+        ctx.skip();
         return;
       }
 
@@ -236,9 +236,9 @@ describe('resolver - Docker integration', () => {
       expect(result?.restartPolicy).toBe('always');
     });
 
-    it('should return null for unused port', async () => {
+    it('should return null for unused port', async (ctx) => {
       if (!dockerAvailable) {
-        console.log('Skipping Docker test');
+        ctx.skip();
         return;
       }
 
@@ -249,9 +249,9 @@ describe('resolver - Docker integration', () => {
   });
 
   describe('resolveBlocker - docker-proxy', () => {
-    it('should resolve docker-proxy to container with restart policy', async () => {
+    it('should resolve docker-proxy to container with restart policy', async (ctx) => {
       if (!dockerAvailable || !testContainerId) {
-        console.log('Skipping Docker test');
+        ctx.skip();
         return;
       }
 

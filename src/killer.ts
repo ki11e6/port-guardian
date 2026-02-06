@@ -85,15 +85,15 @@ async function killProcess(pid: number, force: boolean = false): Promise<void> {
   const signal = force ? '-9' : '-15';
   await execAsync(`kill ${signal} ${safePid}`);
 
-  // Wait a moment for process to terminate
-  await sleep(100);
+  // Wait for process to handle signal and shut down gracefully
+  await sleep(500);
 
   // Verify process is gone
-  const stillRunning = await isProcessRunning(pid);
+  const stillRunning = await isProcessRunning(safePid);
   if (stillRunning && !force) {
-    // Try force kill
-    await execAsync(`kill -9 ${pid}`);
-    await sleep(100);
+    // Escalate to force kill
+    await execAsync(`kill -9 ${safePid}`);
+    await sleep(200);
   }
 }
 
@@ -114,7 +114,7 @@ function sanitizeContainerName(name: string): string {
  */
 async function stopContainer(containerName: string): Promise<void> {
   const safeName = sanitizeContainerName(containerName);
-  await execAsync(`docker stop ${safeName}`);
+  await execAsync(`docker stop -t 3 ${safeName}`, { timeout: 15000 });
 }
 
 /**
@@ -122,16 +122,17 @@ async function stopContainer(containerName: string): Promise<void> {
  */
 async function stopAndRemoveContainer(containerName: string): Promise<void> {
   const safeName = sanitizeContainerName(containerName);
-  await execAsync(`docker stop ${safeName}`);
-  await execAsync(`docker rm ${safeName}`);
+  await execAsync(`docker stop -t 3 ${safeName}`, { timeout: 15000 });
+  await execAsync(`docker rm ${safeName}`, { timeout: 10000 });
 }
 
 /**
  * Check if a process is still running
  */
 async function isProcessRunning(pid: number): Promise<boolean> {
+  const safePid = validatePid(pid);
   try {
-    await execAsync(`kill -0 ${pid} 2>/dev/null`);
+    await execAsync(`kill -0 ${safePid} 2>/dev/null`);
     return true;
   } catch {
     return false;

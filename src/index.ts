@@ -142,13 +142,13 @@ export async function killPort(
     throw new Error(`Invalid port: ${port}. Must be an integer between 1 and 65535.`);
   }
 
-  const scan = await checkPort(port);
+  const portCheck = await checkPort(port);
 
-  if (scan.available) {
+  if (portCheck.available) {
     return { port, killed: false, wasAvailable: true };
   }
 
-  if (!scan.process) {
+  if (!portCheck.process) {
     return {
       port,
       killed: false,
@@ -157,7 +157,7 @@ export async function killPort(
     };
   }
 
-  const blocker = await resolveBlocker(scan.process, port);
+  const blocker = await resolveBlocker(portCheck.process, port);
   const result = await killBlocker(blocker, options);
 
   const blockerInfo: KillPortResult['blocker'] = {

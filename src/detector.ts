@@ -169,8 +169,8 @@ async function parseDockerCompose(
     }
 
     for (const portMapping of servicePorts) {
-      const hostPort = parsePortMapping(portMapping);
-      if (hostPort) {
+      const hostPorts = parsePortMappingAll(portMapping);
+      for (const hostPort of hostPorts) {
         ports.push({
           port: hostPort,
           name: serviceName,
@@ -201,24 +201,27 @@ async function detectFromEnvFiles(cwd: string): Promise<PortSource[]> {
     const lines = content.split('\n');
 
     for (const rawLine of lines) {
-      // Strip inline comments (but not inside quotes)
-      const line = rawLine.replace(/\s+#.*$/, '').trim();
+      const trimmed = rawLine.trim();
 
-      // Skip empty lines, comments, variable references
-      if (!line || line.startsWith('#') || line.includes('${')) {
+      // Skip empty lines, full-line comments, variable references
+      if (!trimmed || trimmed.startsWith('#') || trimmed.includes('${')) {
         continue;
       }
 
-      const eqIndex = line.indexOf('=');
+      const eqIndex = trimmed.indexOf('=');
       if (eqIndex === -1) continue;
 
-      const key = line.slice(0, eqIndex).trim();
-      let value = line.slice(eqIndex + 1).trim();
+      const key = trimmed.slice(0, eqIndex).trim();
+      let value = trimmed.slice(eqIndex + 1).trim();
 
-      // Strip quotes
+      // Strip quotes first, then handle inline comments only for unquoted values
       if ((value.startsWith('"') && value.endsWith('"')) ||
           (value.startsWith("'") && value.endsWith("'"))) {
+        // Quoted value: strip quotes, keep everything inside (including #)
         value = value.slice(1, -1);
+      } else {
+        // Unquoted value: strip inline comments (# preceded by whitespace)
+        value = value.replace(/\s+#.*$/, '');
       }
 
       // Pattern 1: PORT=<number>
@@ -526,12 +529,39 @@ interface LongSyntaxPort {
 }
 
 /**
- * Parse a docker-compose port mapping to get host port
+ * Parse a docker-compose port mapping to get host port(s)
  * Handles:
  * - Short syntax: "3000", "3000:80", "127.0.0.1:3000:80", "3000:80/tcp"
  * - Long syntax: { target: 80, published: 8080 }
- * - Ranges: "3000-3005:80-85"
+ * - Ranges: "3000-3005:80-85" (returns all ports in range)
  */
+function parsePortMappingAll(mapping: string | number | LongSyntaxPort): number[] {
+  const single = parsePortMapping(mapping);
+  if (single === null) return [];
+
+  // Check for range syntax in string mappings
+  if (typeof mapping === 'string') {
+    let str = String(mapping).replace(/\/(tcp|udp)$/i, '');
+    // Extract host part (before the last colon-separated container port)
+    const parts = str.split(':');
+    const hostPart = parts.length === 3 ? parts[1] : parts.length >= 1 ? parts[0] : str;
+    const rangeMatch = hostPart.match(/^(\d+)-(\d+)$/);
+    if (rangeMatch) {
+      const start = parseInt(rangeMatch[1], 10);
+      const end = parseInt(rangeMatch[2], 10);
+      if (isValidPort(start) && isValidPort(end) && end >= start && end - start <= 100) {
+        const ports: number[] = [];
+        for (let p = start; p <= end; p++) {
+          ports.push(p);
+        }
+        return ports;
+      }
+    }
+  }
+
+  return [single];
+}
+
 function parsePortMapping(mapping: string | number | LongSyntaxPort): number | null {
   // Handle long syntax (object form)
   if (typeof mapping === 'object' && mapping !== null) {

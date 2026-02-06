@@ -408,6 +408,24 @@ PORT=3000
       expect(ports[0].port).toBe(3000);
     });
 
+    it('should not strip # inside quoted values', async () => {
+      await writeFile(join(testDir, '.env'), 'DATABASE_URL="postgres://localhost:5432/mydb#pool=5"\n');
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0].port).toBe(5432);
+    });
+
+    it('should handle unquoted values with hash that is not a port', async () => {
+      // PASSWORD=abc#123 should not be detected as a port
+      await writeFile(join(testDir, '.env'), 'PASSWORD=abc#123\n');
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(0);
+    });
+
     it('should skip variable references', async () => {
       await writeFile(join(testDir, '.env'), 'PORT=${SOME_PORT}\n');
 

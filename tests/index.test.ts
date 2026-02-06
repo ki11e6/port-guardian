@@ -55,7 +55,7 @@ ports:
       expect(result.ports[1].port).toBe(59981);
     });
 
-    it('should report conflicts correctly', async () => {
+    it('should report conflicts correctly', async (ctx) => {
       // Find a port that's actually in use
       const { exec } = await import('node:child_process');
       const { promisify } = await import('node:util');
@@ -72,7 +72,7 @@ ports:
       }
 
       if (!usedPort || isNaN(usedPort)) {
-        console.log('Skipping conflict test: no ports in use');
+        ctx.skip();
         return;
       }
 
@@ -84,7 +84,7 @@ ports:
       expect(result.ports.find((p) => p.port === 59999)?.available).toBe(true);
     });
 
-    it('should include blocker info for blocked ports', async () => {
+    it('should include blocker info for blocked ports', async (ctx) => {
       const { exec } = await import('node:child_process');
       const { promisify } = await import('node:util');
       const execAsync = promisify(exec);
@@ -100,7 +100,7 @@ ports:
       }
 
       if (!usedPort || isNaN(usedPort)) {
-        console.log('Skipping blocker test: no ports in use');
+        ctx.skip();
         return;
       }
 
