@@ -5,15 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.1] - 2026-02-06
 
 ### Changed
 - Split `cli.ts` (453 lines) into focused modules: `cli-help.ts`, `cli-init.ts`, `cli-interactive.ts`
 - Replaced `inquirer` (~95MB install) with `@inquirer/prompts` (modular, much smaller)
 - Removed stale `_bmad-output/IMPLEMENTATION-PLAN.md`
 
+### Fixed
+- Cache docker availability check to avoid repeated slow calls
+- Port validation in scanner, consistent safePid usage in killer
+- Timeouts on docker stop/rm/ps commands to prevent CI hangs
+- Increased kill signal wait for graceful process shutdown
+- `.env` inline comment stripping now respects quoted values
+- Port range expansion in docker-compose parsing
+- Improved lsof output parsing for NAME field with spaces
+
 ### Added
-- `CHANGELOG.md` (this file)
+- `CHANGELOG.md`
+- Unit tests for `buildActionChoices` and `printHelp` extracted modules
 
 ## [0.2.0] - 2026-02-05
 
