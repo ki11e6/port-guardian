@@ -326,6 +326,47 @@ services:
       expect(ports).toHaveLength(1);
       expect(ports[0].port).toBe(7000);
     });
+
+    it('should skip port mappings with shell variable references', async () => {
+      const compose = `
+version: '3'
+services:
+  web:
+    ports:
+      - "\${HOST_PORT:-80}:80"
+  db:
+    ports:
+      - "5432:5432"
+`;
+      await writeFile(join(testDir, 'docker-compose.yml'), compose);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0]).toMatchObject({
+        port: 5432,
+        name: 'db',
+      });
+    });
+
+    it('should return only range start for port ranges', async () => {
+      const compose = `
+version: '3'
+services:
+  app:
+    ports:
+      - "3000-3005:80-85"
+`;
+      await writeFile(join(testDir, 'docker-compose.yml'), compose);
+
+      const ports = await detectPorts(testDir);
+
+      expect(ports).toHaveLength(1);
+      expect(ports[0]).toMatchObject({
+        port: 3000,
+        name: 'app',
+      });
+    });
   });
 
   describe('detectFromEnvFiles', () => {

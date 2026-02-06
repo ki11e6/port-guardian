@@ -533,33 +533,14 @@ interface LongSyntaxPort {
  * Handles:
  * - Short syntax: "3000", "3000:80", "127.0.0.1:3000:80", "3000:80/tcp"
  * - Long syntax: { target: 80, published: 8080 }
- * - Ranges: "3000-3005:80-85" (returns all ports in range)
+ * - Ranges: "3000-3005:80-85" → returns only range start (avoids flooding output)
+ * - Variable references like "${PORT:-80}:80" → skipped (unresolvable)
  */
 function parsePortMappingAll(mapping: string | number | LongSyntaxPort): number[] {
-  const single = parsePortMapping(mapping);
-  if (single === null) return [];
-
-  // Check for range syntax in string mappings
-  if (typeof mapping === 'string') {
-    let str = String(mapping).replace(/\/(tcp|udp)$/i, '');
-    // Extract host part (before the last colon-separated container port)
-    const parts = str.split(':');
-    const hostPart = parts.length === 3 ? parts[1] : parts.length >= 1 ? parts[0] : str;
-    const rangeMatch = hostPart.match(/^(\d+)-(\d+)$/);
-    if (rangeMatch) {
-      const start = parseInt(rangeMatch[1], 10);
-      const end = parseInt(rangeMatch[2], 10);
-      if (isValidPort(start) && isValidPort(end) && end >= start && end - start <= 100) {
-        const ports: number[] = [];
-        for (let p = start; p <= end; p++) {
-          ports.push(p);
-        }
-        return ports;
-      }
-    }
-  }
-
-  return [single];
+  if (typeof mapping === 'string' && mapping.includes('${')) return [];
+  const port = parsePortMapping(mapping);
+  if (port === null || !isValidPort(port)) return [];
+  return [port];
 }
 
 function parsePortMapping(mapping: string | number | LongSyntaxPort): number | null {
