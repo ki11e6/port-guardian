@@ -29,6 +29,9 @@ coverage/
 _bmad/
 _bmad-output/
 
+# Documentation (internal, not part of npm package)
+docs/
+
 # Local development
 .claude/
 logs/

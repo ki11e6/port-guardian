@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { parse as parseYaml } from 'yaml';
-import { generatePortGuardianYaml, main } from '../src/cli.js';
+import { generatePortGuardianYaml } from '../src/cli-init.js';
+import { main } from '../src/cli.js';
 import type { PortSource } from '../src/types.js';
 
 describe('generatePortGuardianYaml', () => {

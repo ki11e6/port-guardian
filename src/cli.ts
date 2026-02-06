@@ -1,16 +1,25 @@
 /**
- * CLI Entry Point - Command-line interface
+ * CLI Entry Point - Arg parsing and command dispatch
  */
 
 import { parseArgs } from 'node:util';
 import { readFileSync } from 'node:fs';
-import { writeFile, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-async function getInquirer() {
-  const { default: inquirer } = await import('inquirer');
-  return inquirer;
-}
+import { findAvailablePort } from './scanner.js';
+import { detectPorts } from './detector.js';
+import { scan, killPort } from './index.js';
+import { printHelp } from './cli-help.js';
+import { initCommand } from './cli-init.js';
+import { interactiveResolve, forceKillAll } from './cli-interactive.js';
+import {
+  printHeader,
+  printDetectedPorts,
+  printError,
+  printScanOutput,
+  printKillResult,
+} from './ui.js';
+import type { CliOptions, OutputContext } from './types.js';
 
 // Get version from package.json
 const __filename = fileURLToPath(import.meta.url);
@@ -19,21 +28,6 @@ const packageJson = JSON.parse(
   readFileSync(join(__dirname, '..', 'package.json'), 'utf-8')
 );
 const VERSION = packageJson.version;
-import { detectPorts } from './detector.js';
-import { findAvailablePort } from './scanner.js';
-import { killBlocker } from './killer.js';
-import { scan, killPort } from './index.js';
-import {
-  printHeader,
-  printDetectedPorts,
-  printRestartWarning,
-  printSuccess,
-  printError,
-  printInfo,
-  printScanOutput,
-  printKillResult,
-} from './ui.js';
-import type { PortStatus, CliOptions, Blocker, PortSource, OutputContext } from './types.js';
 
 /**
  * Parse and validate port strings, returning valid port numbers or exiting on error
@@ -181,261 +175,15 @@ export async function main(): Promise<void> {
 
   // Handle conflicts
   if (options.ci) {
-    // Non-interactive mode
     printError('Port conflicts detected. Exiting (CI mode).');
     process.exit(1);
   }
 
   if (options.force) {
-    // Force kill all blockers
     await forceKillAll(scanResult.ports, options);
   } else {
-    // Interactive resolution
     await interactiveResolve(scanResult.ports, options);
   }
-}
-
-/**
- * Force kill all blockers
- */
-async function forceKillAll(
-  portStatuses: PortStatus[],
-  options: CliOptions
-): Promise<void> {
-  const blockedPorts = portStatuses.filter((p) => !p.available && p.blocker);
-
-  for (const port of blockedPorts) {
-    const result = await killBlocker(port.blocker!, { dryRun: options.dryRun, force: true });
-
-    if (result.success) {
-      printSuccess(`Port ${port.port}: ${result.command}`);
-    } else {
-      printError(`Port ${port.port}: ${result.error}`);
-    }
-  }
-}
-
-/**
- * Interactive resolution flow
- */
-async function interactiveResolve(
-  portStatuses: PortStatus[],
-  options: CliOptions
-): Promise<void> {
-  const blockedPorts = portStatuses.filter((p) => !p.available && p.blocker);
-  const inquirer = await getInquirer();
-
-  for (const port of blockedPorts) {
-    const blocker = port.blocker!;
-
-    // Show restart warning if applicable
-    if (blocker.docker?.restartPolicy === 'always') {
-      printRestartWarning();
-    }
-
-    const choices = buildActionChoices(blocker);
-
-    const { action } = await inquirer.prompt([
-      {
-        type: 'list',
-        name: 'action',
-        message: `Port ${port.port} - Choose action:`,
-        choices,
-      },
-    ]);
-
-    if (action === 'skip') {
-      printInfo(`Skipped port ${port.port}`);
-      continue;
-    }
-
-    if (action === 'abort') {
-      printInfo('Aborted');
-      process.exit(1);
-    }
-
-    // Execute the action
-    const result = await killBlocker(blocker, { dryRun: options.dryRun });
-
-    if (result.success) {
-      printSuccess(`Executed: ${result.command}`);
-    } else {
-      printError(`Failed: ${result.error}`);
-    }
-  }
-}
-
-interface Choice {
-  name: string;
-  value: string;
-}
-
-/**
- * Build action choices based on blocker type
- */
-function buildActionChoices(blocker: Blocker): Choice[] {
-  const choices: Choice[] = [];
-
-  if (blocker.isOrphanedDockerProxy) {
-    choices.push({
-      name: 'Kill orphaned docker-proxy (recommended, safe)',
-      value: 'kill',
-    });
-  } else if (blocker.type === 'docker-container') {
-    if (blocker.docker?.restartPolicy === 'always') {
-      choices.push({
-        name: `Stop and remove container (recommended, permanent)`,
-        value: 'stop-and-remove',
-      });
-      choices.push({
-        name: `Stop container only (may restart)`,
-        value: 'stop',
-      });
-    } else {
-      choices.push({
-        name: `Stop container`,
-        value: 'stop',
-      });
-    }
-  } else {
-    choices.push({
-      name: `Kill process (PID ${blocker.pid})`,
-      value: 'kill',
-    });
-  }
-
-  choices.push({ name: 'Skip this port', value: 'skip' });
-  choices.push({ name: 'Abort', value: 'abort' });
-
-  return choices;
-}
-
-/**
- * Init command - generate .portguardian.yml from detected ports
- */
-async function initCommand(force: boolean, ci: boolean): Promise<void> {
-  const configPath = join(process.cwd(), '.portguardian.yml');
-
-  // Check if config already exists
-  const configExists = await stat(configPath).then(() => true, () => false);
-  if (configExists) {
-    if (!force && !ci) {
-      const inquirer = await getInquirer();
-      const { overwrite } = await inquirer.prompt([{
-        type: 'confirm',
-        name: 'overwrite',
-        message: '.portguardian.yml already exists. Overwrite?',
-        default: false,
-      }]);
-      if (!overwrite) {
-        printInfo('Aborted');
-        return;
-      }
-    }
-  }
-
-  // Detect ports (exclude .portguardian.yml to avoid circular detection)
-  const sources = await detectPorts({ exclude: ['.portguardian.yml'] });
-
-  if (sources.length === 0) {
-    printInfo('No ports detected from project files.');
-    printInfo('Creating empty config. Add ports manually.');
-    const yaml = '# Port Guardian Configuration\n# See: https://github.com/ki11e6/port-guardian\nports: []\n';
-    await writeFile(configPath, yaml);
-    printSuccess('Created .portguardian.yml');
-    return;
-  }
-
-  // Show detected ports
-  printDetectedPorts(sources);
-
-  // Confirm before writing
-  if (!force && !ci) {
-    const inquirer = await getInquirer();
-    const { confirm } = await inquirer.prompt([{
-      type: 'confirm',
-      name: 'confirm',
-      message: `Write ${sources.length} port(s) to .portguardian.yml?`,
-      default: true,
-    }]);
-    if (!confirm) {
-      printInfo('Aborted');
-      return;
-    }
-  }
-
-  const yamlContent = generatePortGuardianYaml(sources);
-  await writeFile(configPath, yamlContent);
-  printSuccess(`Created .portguardian.yml with ${sources.length} port(s)`);
-}
-
-/**
- * Generate .portguardian.yml content from detected ports
- */
-export function generatePortGuardianYaml(sources: PortSource[]): string {
-  let yaml = '# Port Guardian Configuration\n';
-  yaml += '# Generated by: port-guardian init\n';
-  yaml += '# See: https://github.com/ki11e6/port-guardian\n\n';
-  yaml += 'ports:\n';
-
-  for (const source of sources) {
-    yaml += `  - port: ${source.port}\n`;
-    if (source.name) {
-      // Quote names with YAML-special characters
-      const needsQuoting = /[:#\[\]{}&*?|>!%@`"']/.test(source.name) || source.name.trim() !== source.name;
-      yaml += `    name: ${needsQuoting ? `"${source.name.replace(/"/g, '\\"')}"` : source.name}\n`;
-    }
-  }
-
-  return yaml;
-}
-
-/**
- * Print help message
- */
-function printHelp(): void {
-  console.log(`
-  Usage: port-guardian [command] [ports...] [options]
-
-  Commands:
-    init            Generate .portguardian.yml from detected ports
-
-  Options:
-    -f, --force     Kill all blockers without prompting
-    -k, --kill      Kill process on port(s) and exit
-    --ci            Non-interactive mode (exit 1 on conflicts)
-    --dry-run       Show what would be done without executing
-    --find [port]   Find an available port (starting from port, or random)
-    --json          Output as JSON (use with --find or --kill)
-    -v, --verbose   Verbose output
-    -h, --help      Show this help message
-    --version       Show version
-
-  Examples:
-    port-guardian                  # Auto-detect ports
-    port-guardian 3000 8080        # Check specific ports
-    port-guardian --force          # Kill all blockers
-    port-guardian --ci             # CI mode (fail on conflicts)
-    port-guardian --kill 3000      # Kill whatever is on port 3000
-    port-guardian -k 3000 8080     # Kill multiple ports
-    port-guardian --kill 3000 --json  # Kill with JSON output
-    port-guardian --find 3000      # Find available port from 3000
-    port-guardian --find           # Find random available port
-    port-guardian --find --json    # Output as JSON: {"port": 3001}
-    port-guardian init             # Generate config from detected ports
-    port-guardian init --force     # Overwrite existing config
-
-  Port Detection Sources (auto-detect order):
-    .portguardian.yml       100%  - Explicit port configuration
-    package.json            100%  - portGuardian field
-    docker-compose*.yml      95%  - All compose files (glob)
-    Nx/Angular project.json  90%  - Serve target ports
-    Framework configs        85%  - vite, webpack, next, nuxt
-    Server entry point       80%  - src/main.ts, src/server.ts listen() calls
-    .env files             70-85% - PORT=, *_PORT=, localhost URLs
-    package.json scripts     70%  - --port flags in npm scripts
-    Dockerfile               70%  - EXPOSE and ENV PORT directives
-`);
 }
 
 // Run when invoked directly or via bin wrapper (not when imported for testing)
