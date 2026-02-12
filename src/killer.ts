@@ -83,7 +83,14 @@ function validatePid(pid: number): number {
 async function killProcess(pid: number, force: boolean = false): Promise<void> {
   const safePid = validatePid(pid);
   const signal = force ? '-9' : '-15';
-  await execAsync(`kill ${signal} ${safePid}`);
+
+  try {
+    await execAsync(`kill ${signal} ${safePid}`);
+  } catch (error) {
+    // Process already gone (ESRCH) — that's a success, port is free
+    if (isNoSuchProcessError(error)) return;
+    throw error;
+  }
 
   // Wait for process to handle signal and shut down gracefully
   await sleep(500);
@@ -92,7 +99,12 @@ async function killProcess(pid: number, force: boolean = false): Promise<void> {
   const stillRunning = await isProcessRunning(safePid);
   if (stillRunning && !force) {
     // Escalate to force kill
-    await execAsync(`kill -9 ${safePid}`);
+    try {
+      await execAsync(`kill -9 ${safePid}`);
+    } catch (error) {
+      if (isNoSuchProcessError(error)) return;
+      throw error;
+    }
     await sleep(200);
   }
 }
@@ -124,6 +136,16 @@ async function stopAndRemoveContainer(containerName: string): Promise<void> {
   const safeName = sanitizeContainerName(containerName);
   await execAsync(`docker stop -t 3 ${safeName}`, { timeout: 15000 });
   await execAsync(`docker rm ${safeName}`, { timeout: 10000 });
+}
+
+/**
+ * Check if an error is ESRCH (No such process) — process already terminated
+ */
+function isNoSuchProcessError(error: unknown): boolean {
+  if (error instanceof Error) {
+    return error.message.includes('No such process');
+  }
+  return false;
 }
 
 /**

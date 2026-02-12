@@ -91,7 +91,7 @@ describe('killer', () => {
   });
 
   describe('killBlocker - error handling', () => {
-    it('should return error for non-existent process', async () => {
+    it('should treat already-terminated process as success', async () => {
       const blocker: Blocker = {
         type: 'native',
         pid: 999999999, // Non-existent PID
@@ -107,8 +107,8 @@ describe('killer', () => {
 
       const result = await killBlocker(blocker, { dryRun: false });
 
-      expect(result.success).toBe(false);
-      expect(result.error).toBeDefined();
+      // Process already gone = port is free = success
+      expect(result.success).toBe(true);
     });
 
     it('should return error for invalid PID (negative)', async () => {
