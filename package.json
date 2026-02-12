@@ -1,6 +1,6 @@
 {
   "name": "port-guardian",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Stop debugging port conflicts. Start shipping.",
   "type": "module",
   "main": "./dist/index.js",
